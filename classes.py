@@ -14,12 +14,21 @@ from concurrent.futures import ThreadPoolExecutor
 
 class Hit:
     
-    def __init__(self, uniprot, query, kegg_id = '', name = '', scaff = '', start = 0, end = 0, strand = ''):
+    def __init__(self, uniprot, query, kegg_id = [], name = '', taxon = '', 
+                 db = "", evalue = 1, prob = 1, score = 0, seqid = 0, qcov = 0,
+                 scaff = '', start = 0, end = 0, strand = ''):
         
         self.uniprot: str = uniprot #Uniprot ID
         self.query: str = query #ID of the homologous query protein
         self.kegg_id: list = kegg_id #KEGG ID
         self.name: list = name #name of the hit in the KEGG entry
+        self.taxon: str = taxon #name of the taxon in which this hit was found
+        self.db: str = db #Structure database the hit was found in
+        self.evalue: float = evalue #evalue of the FoldSeek hit
+        self.prob: float = prob #FoldSeek hit probability score
+        self.score: float = score #FoldSeek score
+        self.seqid: float = seqid #Sequence identity with the query protein
+        self.qcov: float = qcov #Query coverage with the query protein
         self.scaff: str = scaff #scaffold this hit is encoded in
         self.start: int = int(start) #starting position of the coding gene on the scaffold
         self.end: int = int(end) #end position of the coding gene on the scaffold
@@ -47,6 +56,7 @@ class Cluster:
         self.length: int = abs(self.end - self.start)
         
         self.scaff: str = list(set([h.scaff for h in self.hits]))[0]
+        self.taxon: str = list(set([h.taxon for h in self.hits]))[0]
         
         return None
     
@@ -133,22 +143,45 @@ class Search:
         with ThreadPoolExecutor(max_workers = 5) as executor:
             all_results = dict(zip(self.query.keys(), executor.map(retrieve_foldseek_results, all_job_ids)))
         
-        return all_results
+        self.hits = all_results
+        
+        return None
+    
+    
+    def parse_foldseek_results(self, max_eval, min_prob, min_score, min_seqid, min_qcov):
+        all_hits = []
+        for query, task in self.hits.items():
+            for results_by_db in task['results']:
+                db = results_by_db['db']
+                for hit_entry in results_by_db['alignments'][0]:
+                    target = hit_entry['target']
+                    uniprot = target.split('-')[1]
+                    name = ' '.join(target.split(' ')[1:])
+                    taxon = hit_entry['taxName']
+                    evalue = float(hit_entry['eval'])
+                    prob = float(hit_entry['prob'])
+                    score = float(hit_entry['score'])
+                    seqid = float(hit_entry['seqId'])
+                    qcov = (int(hit_entry['qEndPos']) - int(hit_entry['qStartPos']))/int(hit_entry['qLen'])*100
+                    if evalue <= max_eval and prob >= min_prob and score >= min_score and seqid >= min_seqid and qcov >= min_qcov:
+                        hit = Hit(uniprot, query, name = name, taxon = taxon, db = db, evalue = evalue,
+                                  prob = prob, score = score, seqid = seqid, qcov = qcov)
+                        all_hits.append(hit)
+            
+        self.hits = all_hits
+        
+        return None
             
                 
     def crossref(self):
-        
-        """
-        Extracts the entry name from a full pulled KEGG record.
-        """
-        def extract_entry_name(entry: str) -> str:
-            return [line for line in entry.split('\n') if 'NAME' in line][0][12:]
-        
         """
         Extracts the genomic positional information from a full pulled KEGG record.
         """
         def extract_positional_information(entry: str) -> str:
-            return [line for line in entry.split('\n') if 'POSITION' in line][0][12:]
+            try:
+                return [line for line in entry.split('\n') if 'POSITION' in line][0][12:]
+            except IndexError:
+                return None
         
         """
         Extracts a mapping dictionary from the full Uniprot crossref mapping table, linking the Uniprot ID (keys) with a list of
@@ -162,17 +195,19 @@ class Search:
             return res
         
         """
-        Auxiliary function that splits a hit with multiple crossrefs for a given attribute into multiple hits that are identical
-        except for that exact crossref attribute. The split hits are first introduced at the index of the old hit before the full
+        Auxiliary function that standardises the hits. In case of multiple values for a given attribute, it splits it into 
+        multiple hits that are identical except for that exact crossref attribute. The split hits are first introduced instead of the old hit before the full
         hit list is being flattened.
+        In case of an absent or default attribute value, the hit is discarded.
         
         Mutates:
             self.hits: list: the hit list containing Hit objects that represent proteins that are structurally homologous to
                              one of the query proteins.
         """
-        def split_multiple_crossrefs(self, attr):
+        def sanitise_attr(self, attr):
+            standardised_hits = []
             # Loop over all hits, but keep track of the index
-            for idx, h in enumerate(self.hits):
+            for h in self.hits:
                 # Determine whether we should split a record
                 nb_copies = len(getattr(h, attr))
                 # If we need to split a record, make as much copies as there are crossrefs and adjust each crossref to one of these
@@ -185,15 +220,18 @@ class Search:
                         split_records.append(new_record)
                         copy_counter += 1
                     # Insert at the index of the old record
-                    self.hits[idx] = split_records
+                    standardised_hits.append(split_records)
                 # If we don't need to split the record, just unlist it
-                else:
+                elif nb_copies == 1:
                     setattr(h, attr, getattr(h, attr)[0])
                     # Insert at the index of the old record
-                    self.hits[idx] = [h]
+                    standardised_hits.append([h])
+                # If it's empty, don't include it in the new hit set
+                else:
+                    continue
             
             # Flatten the full hit list again
-            self.hits = list(chain(*self.hits))
+            self.hits = list(chain(*standardised_hits))
             
             return None
         
@@ -203,21 +241,19 @@ class Search:
         all_uniprot_ids = [h.uniprot for h in self.hits]
         all_cross_refs = self.mapping_table.filter(self.mapping_table['Uniprot_ID'].is_in(all_uniprot_ids))
         all_uniprot_kegg = prepare_mapping_dict(all_cross_refs, 'KEGG')
-        # Fill the KEGG IDs
+        # Fill the KEGG IDs, if possible
         for h in self.hits:
-            h.kegg_id = all_uniprot_kegg[h.uniprot]
-        # Split records with multiple crossrefs
-        split_multiple_crossrefs(self, 'kegg_id')
+            try:
+                h.kegg_id = all_uniprot_kegg[h.uniprot]
+            except KeyError:
+                continue
+        # Split records with multiple crossrefs and discard the ones without crossref
+        sanitise_attr(self, 'kegg_id')
             
         ## Then, pull all KEGG records
         all_kegg_ids = [h.kegg_id for h in self.hits]
         pull = kgp.MultiProcessMultiplePull(n_workers = 2)
         _, records = pull.pull_dict(all_kegg_ids)
-        
-        ## Extract the record names from the pulled KEGG entries
-        names = {k: extract_entry_name(v) for k,v in records.items()}
-        for h in self.hits:
-            h.name = names[h.kegg_id]
         
         ## Extract genomic positions from the pulled KEGG entries
         positions = {k: extract_positional_information(v) for k,v in records.items()}
@@ -227,19 +263,29 @@ class Search:
         processed_hits = []
         for h in self.hits:
             position_info = positions[h.kegg_id]
-            # If there are no numeric characters, there is no positional information, which makes this hit useless.
-            # Therefore, it is not included in the processed hit set
+            # If there is not even position info, there is no point of keeping the hit
+            if position_info == None:
+                continue
+            # If there are no numeric characters, there is no positional information
             if not(any(char.isdigit() for char in position_info)):
                 continue
             # If there is no colon, then there probably is no scaffold information,
             # but we have a second data source in our Uniprot crossref mapping table
             elif ':' not in position_info:
-                refseq_id = all_uniprot_refseq[h.uniprot] # This might result in a double crossref, which will be fixed later on
-                first_coor, second_coor = position_info.split('..')
+                try:
+                    refseq_id = all_uniprot_refseq[h.uniprot] # This might result in a double crossref, which will be fixed later on
+                    first_coor, second_coor = position_info.split('..')
+                # Bad luck, there's no RefSeq crossref in Uniprot either
+                except KeyError:
+                    continue
+            # TODO: decide on whether we will support non-bacterial analyses. The cross-referencing is more cumbersome in this case
             # Check whether it has the format of a complete genomic position field as we would like to have it from KEGG
-            elif len(re.findall(r'.+:[complement]?\(?[0-9]+\.\.[0-9]+\)?', position_info)) > 1:
-                refseq_id, coords = [position_info.split(':')] # wrapped in a list for consistency with the output of the case above
-                first_coor, second_coor = coords.split('..')
+            elif len(re.findall(r'.+:.*[0-9]+\.\.[0-9]+.*', position_info)) > 0:
+                refseq_id, coords = position_info.split(':') # wrapped in a list for consistency with the output of the case above
+                # Just take the minimal and maximum coordinate. For introns, this might give issues with the gene/exon length.
+                coord_groups = re.findall(r'\d+\.\.\d+', coords)
+                coord_groups = list(chain(*[i.split('..') for i in coord_groups]))
+                first_coor, second_coor = min(coord_groups), max(coord_groups)
             # Something else not encountered so far
             else:
                 print(f'Invalid positional record found for {h.kegg_id}! Skipping...')
@@ -261,9 +307,9 @@ class Search:
             # Stack the processed hits
             processed_hits.append(h)
                 
-        # Update the hit set and split double crossrefs in the scaff attribute
+        # Update the hit set and sanitise the scaff attribute
         self.hits = processed_hits
-        split_multiple_crossrefs(self, 'scaff')   
+        sanitise_attr(self, 'scaff')   
     
     def identify_clusters(self):
         pass
@@ -276,6 +322,7 @@ b = Hit('K0EVU8', 'query2')
 c = Cluster([a,b], 1)
 s = Search({'query1': '/home/lucas/bin/cfoldseeker_old/AF3_models/fold_sco5088_model_0.cif',
             'query2': '/home/lucas/bin/cfoldseeker_old/AF3_models/fold_sco5089_model_0.cif'},
-           {}, "uniprot_kegg_nucl.gz", hits = [a,b])
-# s.crossref()
-res = s.run_foldseek()
+           {}, mapping_table_path = "uniprot_kegg_nucl.gz")
+s.run_foldseek()
+s.parse_foldseek_results(1, 0, 0, 25, 70)
+s.crossref()
