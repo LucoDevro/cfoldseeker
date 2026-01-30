@@ -3,6 +3,8 @@
 
 import re
 import time
+import sys
+import operator
 import requests
 import polars as pl
 import networkx as nx
@@ -22,6 +24,7 @@ DEFAULTS = {'mode': 'local',
             'min_seqid': 25,
             'min_qcov': 70,
             'gap': 1000,
+            'max_length': 20000,
             'min_hits': 2,
             'min_cov_qrs': 2,
             'require': []
@@ -85,32 +88,6 @@ class Hit:
                     abs(self.end() - other_hit.end())]
         return min(all_dist)
     
-    # Determines whether two hits are quasi-identical, i.e. there is at least a 90% overlap in the coordinate intervals
-    def quasi_identical(self, other_hit, quasi_identity_threshold = 0.9):
-        max_start = max(self.start(), other_hit.start())
-        min_end = min(self.end(), other_hit.end())
-        overlap_length = min_end - max_start
-        x_length = abs(self.end() - self.start())
-        y_length = abs(other_hit.end() - other_hit.start())
-        x_overlap = overlap_length / x_length
-        y_overlap = overlap_length / y_length
-        if min(x_overlap, y_overlap) >= quasi_identity_threshold:
-            return True
-        else:
-            return False
-        
-    # Determines whether one hit overlaps another, i.e. the first's coordinates' interval overlaps at least 90% with the second one's
-    def part_of(self, other_hit, overlap_threshold = 0.9):
-        max_start = max(self.start(), other_hit.start())
-        min_end = min(self.end(), other_hit.end())
-        overlap_length = min_end - max_start
-        x_length = abs(self.end() - self.start())
-        x_overlap = overlap_length / x_length
-        if x_overlap >= overlap_threshold:
-            return True
-        else:
-            return False
-        
 
 class Cluster:
     
@@ -169,8 +146,8 @@ class Search:
         self.hits: list = hits # list of Hit objects
         self.clusters: list = clusters # list of Cluster objects
         # The full Uniprot crossref mapping table casted in a polars DataFrame
-        self.mapping_table: dict = pl.read_csv("uniprot_kegg_nucl.gz", has_header = False, separator = "\t",
-                                               new_columns = ['Uniprot_ID', 'Target_DB', 'ID'])
+        self.mapping_table: dict = pl.read_csv("uniprot_kegg.gz", has_header = False, separator = "\t",
+                                               new_columns = ['Uniprot_ID', 'KEGG_ID'])
                 
         return None
     
@@ -279,6 +256,10 @@ class Search:
                         hit = Hit(uniprot, query, name = name, taxon_name = taxon_name, taxon_id = taxon_id,
                                   db = db, evalue = evalue, prob = prob, score = score, seqid = seqid, qcov = qcov)
                         all_hits.append(hit)
+                        
+        if len(all_hits) == 0:
+            print("No hits identified by FoldSeek!")
+            sys.exit()
             
         ## Filter out redundant hits from multiple databases
         # Group by uniprot ID to find potentially redundant hits
@@ -297,7 +278,7 @@ class Search:
         
         # Put everything back together and sort by Uniprot ID
         filtered_hits = list(filtered_hits.values()) + redundant_hits
-        filtered_hits = sorted(list(it.chain(*filtered_hits)), key = lambda x: x.uniprot)
+        filtered_hits = sorted(list(it.chain(*filtered_hits)), key = operator.attrgetter('uniprot'))
         
         self.hits = filtered_hits
         
@@ -308,40 +289,103 @@ class Search:
         """
         Crossrefs all hits where possible and retrieves the genomic neighbourhood information (scaffold IDs and coordinates)
         """
-        def extract_positional_information(entry: str) -> str:
+        def extract_positional_information(gene_entry: str) -> dict:
             """
-            Extracts the genomic positional information from a full pulled KEGG record.
+            Extracts the genomic positional information from a pulled KEGG Gene record.
             """
-            try:
-                return [line for line in entry.split('\n') if 'POSITION' in line][0][12:]
-            except IndexError:
-                return None
-        
-        def prepare_mapping_dict(crossref_df: pl.DataFrame, target_db: str) -> dict:
+            position_line = [line for line in gene_entry.split('\n') if 'POSITION' in line]
+            position_info = {}
+            if len(position_line) == 0:
+                return position_info
+            else:
+                position_line = position_line[0]
+                if ':' in position_line:
+                    internal_scaffold_id, coords = position_line.split(':')
+                    internal_scaffold_id = internal_scaffold_id[12:]
+                else:
+                    internal_scaffold_id, coords = '', position_line
+                coords = coords.translate(str.maketrans('', '', '<>'))
+                coord_groups = re.findall(r'\d+\.\.\d+', coords)
+                if len(coord_groups) == 0:
+                    return position_info
+                coord_groups = [i.split('..') for i in coord_groups]
+                coord_groups = [[int(j) for j in i] for i in coord_groups]
+                if 'completement' in coords:
+                    strand = "-"
+                else:
+                    strand = "+"
+                
+                position_info['scaffold'] = internal_scaffold_id
+                position_info['coords'] = coord_groups
+                position_info['strand'] = strand
+                
+                return position_info
+
+        def extract_scaffold_information(genome_entry: str) -> dict:
+            """
+            Extracts the chromosome information from a pulled KEGG Genome record.
+            """
+            lines = genome_entry.split('\n')
+            ## First the CHROMOSOME field
+            # Find the start
+            start_chromosome = [idx for idx,line in enumerate(lines) if 'CHROMOSOME' in line]
+            if len(start_chromosome) == 0:
+                mapping_scaffolds = {}
+            else:
+                # Expand it
+                index = start_chromosome[0]
+                chromosome_field = [lines[index][12:]]
+                while index < len(lines) and lines[index+1].startswith(' '):
+                    index += 1
+                    chromosome_field.append(lines[index][12:])
+                # Parse it
+                internal_scaffold_ids = [re.split(r'[;\s]', l)[0] for l in chromosome_field]
+                internal_scaffold_ids = ['' if l == 'Circular' else l for l in internal_scaffold_ids]
+                scaffolds = [l.split(':')[1][:-1] for l in chromosome_field]
+                mapping_scaffolds = dict(zip(internal_scaffold_ids, scaffolds))
+            
+            ## Then the PLASMIDS field
+            # Find the start
+            start_plasmid = [idx for idx,line in enumerate(lines) if 'PLASMID' in line]
+            if len(start_plasmid) == 0:
+                mapping_plasmids = {}
+            else:
+                # Expand it
+                index = start_plasmid[0]
+                plasmid_field = [lines[index][12:]]
+                while index < len(lines) and lines[index+1].startswith(' '):
+                    index += 1
+                    plasmid_field.append(lines[index][12:])
+                # Parse it
+                internal_plasmid_ids = [re.split(r'[;\s]', l)[0] for l in plasmid_field]
+                plasmids = [l.split(':')[1][:-1] for l in plasmid_field]
+                mapping_plasmids = dict(zip(internal_plasmid_ids, plasmids))
+            
+            ## Wrap it in a dictionary
+            mapping = mapping_scaffolds | mapping_plasmids
+            
+            return mapping
+                        
+        def prepare_mapping_dict(crossref_df: pl.DataFrame) -> dict:
             """
             Extracts a mapping dictionary from the full Uniprot crossref mapping table, linking the Uniprot ID (keys) with a list of
             one or more multiple crossrefs in the provided target database (values).
             """
-            res = crossref_df.filter(crossref_df['Target_DB'] == target_db).drop('Target_DB')
-            res = res.group_by('Uniprot_ID').all()
-            res = dict(zip(res['Uniprot_ID'], res['ID'].to_list()))
+            res = crossref_df.group_by('Uniprot_ID').all()
+            res = dict(zip(res['Uniprot_ID'], res['KEGG_ID'].to_list()))
             
             return res
         
-        def sanitise_attr(self, attr):
+        def sanitise_hit_attr(hits, attr) -> list:
             """
-            Auxiliary function that standardises the hits. In case of multiple values for a given attribute, it splits it into 
-            multiple hits that are identical except for that exact crossref attribute. The split hits are first introduced instead of the old hit before the full
-            hit list is being flattened.
-            In case of an absent or default attribute value, the hit is discarded.
-            
-            Mutates:
-                self.hits: list: the hit list containing Hit objects that represent proteins that are structurally homologous to
-                                 one of the query proteins.
+            Auxiliary function that sanitises the hit list. In case of multiple values for a given attribute, it splits it into 
+            multiple hit instances that are identical except for that exact crossref attribute. The split hits are first introduced
+            in a list replacing the old hit instance before the full hit list is being flattened.
+            In case of an absent attribute, the hit is discarded.
             """
             sanitised_hits = []
             # Loop over all hits, but keep track of the index
-            for h in self.hits:
+            for h in hits:
                 # Determine whether we should split a record
                 nb_copies = len(getattr(h, attr))
                 # If we need to split a record, make as much copies as there are crossrefs and adjust each crossref to one of these
@@ -365,84 +409,55 @@ class Search:
                     continue
             
             # Flatten the full hit list again
-            self.hits = list(it.chain(*sanitised_hits))
+            hits = list(it.chain(*sanitised_hits))
             
-            return None
+            return hits
         
         
         ## First, fill all KEGG IDs
         # Extract a mapping table for KEGG IDs from the Uniprot crossref mapping table
         all_uniprot_ids = [h.uniprot for h in self.hits]
         all_cross_refs = self.mapping_table.filter(self.mapping_table['Uniprot_ID'].is_in(all_uniprot_ids))
-        all_uniprot_kegg = prepare_mapping_dict(all_cross_refs, 'KEGG')
+        all_uniprot_kegg = prepare_mapping_dict(all_cross_refs)
         # Fill the KEGG IDs, if possible
         for h in self.hits:
-            try:
+            if h.uniprot in all_uniprot_kegg.keys():
                 h.kegg_id = all_uniprot_kegg[h.uniprot]
-            except KeyError:
+            else:
                 continue
         # Split records with multiple crossrefs and discard the ones without crossref
-        sanitise_attr(self, 'kegg_id')
+        self.hits = sanitise_hit_attr(self.hits, 'kegg_id')
             
-        ## Then, pull all KEGG records
-        all_kegg_ids = [h.kegg_id for h in self.hits]
-        pull = MultiProcessMultiplePull(n_workers = 2)
-        _, records = pull.pull_dict(all_kegg_ids)
+        ## Pull all KEGG Gene and Genome records
+        pull = MultiProcessMultiplePull(n_workers = 10)
+        # KEGG Gene IDs
+        all_kegg_gene_ids = [h.kegg_id for h in self.hits]
+        _, gene_records = pull.pull_dict(all_kegg_gene_ids)
+        # KEGG Genome IDs
+        all_kegg_genome_ids = list({'genome:' + i.split(':')[0] for i in all_kegg_gene_ids})
+        _, genome_records = pull.pull_dict(all_kegg_genome_ids)
+        genome_records = {k.split(':')[-1]: v for k,v in genome_records.items()}
         
-        ## Extract genomic information from the pulled KEGG entries
-        positions = {k: extract_positional_information(v) for k,v in records.items()}
-        # Extract a mapping table for RefSeq Nucleotide IDs from the Uniprot crossref mapping table
-        all_uniprot_refseq = prepare_mapping_dict(all_cross_refs, 'RefSeq_NT')
-        # Start sorting out the genomic information
+        ## Extract scaffold and coordinate information
+        positions = {k: extract_positional_information(v) for k,v in gene_records.items()}
+        scaffolds = {k: extract_scaffold_information(v) for k,v in genome_records.items()}
         processed_hits = []
         for h in self.hits:
-            position_info = positions[h.kegg_id]
-            # If there is not even position info, there is no point of keeping the hit
-            if position_info == None:
+            try:
+                position_info = positions[h.kegg_id]
+                scaffold_info = scaffolds[h.kegg_id.split(':')[0]]
+            except KeyError:
                 continue
-            # If there are no numeric characters, there is no positional information
-            elif not(any(char.isdigit() for char in position_info)):
+            if len(position_info) == 0 or len(scaffold_info) == 0:
                 continue
-            # If there is no colon, then there probably is no scaffold information,
-            # but we have a second data source in our Uniprot crossref mapping table
-            elif ':' not in position_info:
-                try:
-                    refseq_id = all_uniprot_refseq[h.uniprot] # This might result in a double crossref, which will be fixed later on
-                    coords = position_info
-                # Bad luck, there's no RefSeq crossref in Uniprot either, discard the hit
-                except KeyError:
-                    continue
-            # Check whether it has the format of a complete genomic position field as we would like to have it from KEGG
-            elif len(re.findall(r'.+:.*<?[0-9]+\.\.>?[0-9]+.*', position_info)) > 0:
-                refseq_id, coords = position_info.split(':')
-                refseq_id = [refseq_id] # wrapped in a list for consistency with the output of the case above
-            # Something else not encountered so far
-            else:
-                print(f'Invalid positional record found for {h.kegg_id}! Skipping...')
-                continue
-                        
-            # Save the scaffold and the genomic coordinates
-            h.scaff = refseq_id
-
-            # Parse the genomic coordinates. The fact that we got here in the loop implies that there is parsable information.
-            coords = coords.translate(str.maketrans('', '', '<>'))
-            coord_groups = re.findall(r'\d+\.\.\d+', coords)
-            coord_groups = [i.split('..') for i in coord_groups]
-            coord_groups = [[int(j) for j in i] for i in coord_groups]
-            h.coords = coord_groups
+            h.coords = position_info['coords']
+            h.strand = position_info['strand']
+            h.scaff = scaffold_info[position_info['scaffold']]
             
-            # Need to do some further processing in case of a reverse strand gene
-            if 'complement' in coords:
-                h.strand = "-"
-            else:
-                h.strand = '+'
-                
-            # Stack the processed hits
             processed_hits.append(h)
                 
         ## Update the hit set and sanitise the scaff attribute
         self.hits = processed_hits
-        sanitise_attr(self, 'scaff')
         
         return None
         
@@ -454,6 +469,7 @@ class Search:
         
         ### Load the requirements from params
         gap = self.params['gap']
+        max_length = self.params['max_length']
         min_hits = self.params['min_hits']
         min_covered_queries = self.params['min_cov_qrs']
         require = self.params['require']
@@ -462,9 +478,9 @@ class Search:
         ## First, make groups by scaffold and taxon ID
         grouped_scaffs = {}
         for h in self.hits:
-            try:
+            if (h.scaff, h.taxon_id) in grouped_scaffs.keys():
                 grouped_scaffs[(h.scaff, h.taxon_id)].append(h)
-            except KeyError:
+            else:
                 grouped_scaffs[(h.scaff, h.taxon_id)] = [h]
         
         ## Then, calculate the intergenic distance between all connections and filter out the ones failing the intergenic threshold
@@ -473,6 +489,9 @@ class Search:
             dists = {pair: Hit.distance(*pair) for pair in it.combinations(hits, 2)}
             dists = {k:v for k,v in dists.items() if v <= gap}
             close_groups.append(list(dists.keys()))
+        if len(close_groups) == 0:
+            print("No cluster could be identified!")
+            sys.exit()
         
         ## Then identify the clusters by identifying series of connected Hit objects using an undirected network graph
         clusters = []
@@ -485,67 +504,26 @@ class Search:
             clusters.append(cluster)
         clusters = list(it.chain(*clusters))
         
-        ### Reducing redundancy introduced by crossreffing
-        ## Collapse quasi-identical hits within clusters
-        collapsed_clusters = []
-        for cluster in clusters:
-            # First identify the quasi_identical hit pairs
-            quasi_identical = {pair: Hit.quasi_identical(*pair) for pair in it.combinations(cluster, 2)}
-            quasi_identical = [k for k,v in quasi_identical.items() if v]
-            if len(quasi_identical) == 0:
-                collapsed_clusters.append(cluster)
-                continue
-            # Then identify groups of quasi-identical pairs using an undirected network graph
-            G = nx.Graph()
-            G.add_edges_from(quasi_identical)
-            quasi_identical_groups = list(nx.connected_components(G))
-            # Collapse the groups by taking the first item of each group
-            collapsed_groups = [{list(qig)[0]} for qig in quasi_identical_groups]
-            hits_to_remove = set.union(*quasi_identical_groups) # the complete groups
-            hits_to_readd = set.union(*collapsed_groups) # the selected singletons
-            collapsed_clusters.append(cluster - hits_to_remove | hits_to_readd)
-        
-        ## Collapse partial overlap hits within clusters (by keeping the smaller parts and discarding apparent fusion proteins)
-        collapsed_clusters_no_fusions = []
-        for cluster in collapsed_clusters:
-            if len(cluster) == 1:
-                collapsed_clusters_no_fusions.append(cluster)
-                continue
-            # First identify hits that are part of another hit
-            master_and_parts = {pair: Hit.part_of(*pair) for pair in it.permutations(cluster, 2)}
-            master_and_parts = [k for k,v in master_and_parts.items() if v]
-            if len(master_and_parts) == 0:
-                collapsed_clusters_no_fusions.append(cluster)
-                continue
-            # Then identify the master (or sink) hits (i.e. the fusion hits) using a directed network graph
-            G = nx.DiGraph()
-            G.add_edges_from(master_and_parts)
-            masters = {node for node in G.nodes() if G.out_degree(node) == 0}
-            # Remove these master hits from the cluster
-            collapsed_clusters_no_fusions.append(cluster - masters)
-            
-        ### Applying cluster requirements
-        ## Select for requested cluster configurations
+        ### Apply intra-cluster requirements
         # Minimum number of hits in a cluster
-        resulting_set = [cl for cl in collapsed_clusters_no_fusions if len(cl) >= min_hits]
+        clusters_filt = [cl for cl in clusters if len(cl) >= min_hits]
         # Minimum number of covered queries and required queries
-        covered_queries = [{h.query for h in cl} for cl in resulting_set]
-        resulting_set = [cl for cl,qrs in zip(resulting_set, covered_queries)
-                         if len(qrs) >= min_covered_queries and set(require) <= qrs]
+        covered_queries = [{h.query for h in cl} for cl in clusters_filt]
+        clusters_filt = [cl for cl,qrs in zip(clusters_filt, covered_queries)
+                        if len(qrs) >= min_covered_queries and set(require) <= qrs]
         
-        ### Preparing results
-        ## Reorder the clusters by genomic coordinates
-        results = [sorted(cl, key = lambda h: h.start()) for cl in resulting_set]
+        ### Create the Cluster objects from the filtered hit clusters
+        res_objects = [Cluster(list(cl), number = idx) for idx,cl in enumerate(clusters_filt)]
         
-        ## Create the Cluster objects from the processed hit clusters
-        res_objects = [Cluster(cl, number = idx) for idx,cl in enumerate(results)]
+        ### Filter for maximum cluster length
+        res_objects_filt = [cl for cl in res_objects if cl.length <= max_length]
         
         ## Rank by cluster score and renumber
-        res_objects.sort(key = lambda x: x.score, reverse = True)
-        for idx,cl in enumerate(res_objects):
+        res_objects_filt.sort(key = operator.attrgetter('score'), reverse = True)
+        for idx,cl in enumerate(res_objects_filt):
             cl.number = idx+1
         
-        self.clusters = res_objects
+        self.clusters = res_objects_filt
         
         return None
    
@@ -556,11 +534,11 @@ class Search:
         """
         def get_sequence_length_from_cif(file):
             """
-            Determines the sequence length of the structure in the input CIF file.
+            Determines the CDS sequence length of the protein structure in the input CIF file.
             """
             structure = MMCIF2Dict(file)
             res_ids = [int(i) for i in structure['_entity_poly_seq.num']]
-            return max(res_ids)
+            return max(res_ids)*3
         
         def get_clusters_by_id(self, nbs):
             """
@@ -665,9 +643,10 @@ class Search:
                 this_organism['scaffolds'][scaff] = this_scaffold
                 
             # Populate this scaffold with cluster for each cluster identified on this scaffold
+            # Keep track of the number of hits covered on this scaffold for proper references in output files
+            nb_hits_covered = 0
             for cl in clusters:
                 cblaster_this_cluster = {}
-                cblaster_this_cluster['indices'] = list(range(len(cl.hits)))
                 cblaster_this_cluster['subjects'] = []
                 cblaster_this_cluster['intermediate_genes'] = []
                 cblaster_this_cluster['score'] = cl.score
@@ -679,17 +658,20 @@ class Search:
                 # Populate this scaffold with subjects (hits) for each hit identified on this scaffold
                 # and add the link with the cluster
                 these_hits = cl.hits
+                hits_covered_this_cluster = len(these_hits)
+                cblaster_this_cluster['indices'] = list(range(nb_hits_covered, nb_hits_covered + hits_covered_this_cluster))
+                nb_hits_covered += hits_covered_this_cluster
                 for hit in these_hits:
                     cblaster_this_subject = {}
                     cblaster_this_subject['id'] = None
                     cblaster_this_subject['hits'] = [{'query': hit.query,
-                                                      'subject': hit.uniprot,
+                                                      'subject': hit.kegg_id,
                                                       'identity': hit.seqid,
                                                       'coverage': hit.qcov,
                                                       'evalue': hit.evalue,
                                                       'bitscore': hit.score}]
-                    cblaster_this_subject['name'] = hit.uniprot
-                    cblaster_this_subject['ipg'] = hit.kegg_id
+                    cblaster_this_subject['name'] = hit.kegg_id
+                    cblaster_this_subject['ipg'] = hit.uniprot
                     cblaster_this_subject['start'] = hit.start()
                     cblaster_this_subject['end'] = hit.end()
                     cblaster_this_subject['strand'] = int(f"{hit.strand}1")
@@ -725,6 +707,7 @@ params = {'mode': 'local',
           'min_seqid': 25,
           'min_qcov': 70,
           'gap': 1000,
+          'max_length': 20000,
           'min_hits': 2,
           'min_cov_qrs': 2,
           'require': []
@@ -736,3 +719,12 @@ s.parse_foldseek_results()
 s.crossref()
 s.identify_clusters()
 session = s.generate_cblaster_session()
+
+with open("test_session.json", "w") as handle:
+    session.to_json(fp = handle)
+    
+with open('test_summary', 'w') as handle:
+    session.format(form = "summary", fp = handle)
+    
+with open('test_binary', 'w') as handle:
+    session.format(form = "binary", fp = handle)
