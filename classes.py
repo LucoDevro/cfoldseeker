@@ -23,7 +23,7 @@ DEFAULTS = {'mode': 'local',
             'min_score': 0,
             'min_seqid': 25,
             'min_qcov': 70,
-            'gap': 1000,
+            'max_gap': 1000,
             'max_length': 20000,
             'min_hits': 2,
             'min_cov_qrs': 2,
@@ -145,9 +145,9 @@ class Search:
         self.params: dict = params # dictionary containing the search configuration
         self.hits: list = hits # list of Hit objects
         self.clusters: list = clusters # list of Cluster objects
-        # The full Uniprot crossref mapping table casted in a polars DataFrame
-        self.mapping_table: dict = pl.read_csv("uniprot_kegg.gz", has_header = False, separator = "\t",
-                                               new_columns = ['Uniprot_ID', 'KEGG_ID'])
+        # The full Uniprot crossref mapping table casted in a polars LazyFrame
+        self.mapping_table: dict = pl.scan_csv(mapping_table_path, has_header = False, separator = "\t",
+                                               new_columns = ['Uniprot', 'DB', 'ID'])
                 
         return None
     
@@ -366,13 +366,13 @@ class Search:
             
             return mapping
                         
-        def prepare_mapping_dict(crossref_df: pl.DataFrame) -> dict:
+        def prepare_mapping_dict(crossref_df: pl.LazyFrame) -> dict:
             """
-            Extracts a mapping dictionary from the full Uniprot crossref mapping table, linking the Uniprot ID (keys) with a list of
-            one or more multiple crossrefs in the provided target database (values).
+            Effectively extracts a mapping dictionary from the full Uniprot crossref mapping table, linking the Uniprot ID (keys)
+            with a list of one or more multiple crossrefs in the provided target database (values).
             """
-            res = crossref_df.group_by('Uniprot_ID').all()
-            res = dict(zip(res['Uniprot_ID'], res['KEGG_ID'].to_list()))
+            res = crossref_df.group_by('Uniprot').all().collect()
+            res = dict(zip(res['Uniprot'], res['ID'].to_list()))
             
             return res
         
@@ -417,7 +417,8 @@ class Search:
         ## First, fill all KEGG IDs
         # Extract a mapping table for KEGG IDs from the Uniprot crossref mapping table
         all_uniprot_ids = [h.uniprot for h in self.hits]
-        all_cross_refs = self.mapping_table.filter(self.mapping_table['Uniprot_ID'].is_in(all_uniprot_ids))
+        all_cross_refs = self.mapping_table.filter(pl.col('Uniprot').is_in(all_uniprot_ids)
+                                                   ).filter(pl.col('DB') == "KEGG").drop('DB')
         all_uniprot_kegg = prepare_mapping_dict(all_cross_refs)
         # Fill the KEGG IDs, if possible
         for h in self.hits:
@@ -468,7 +469,7 @@ class Search:
         """
         
         ### Load the requirements from params
-        gap = self.params['gap']
+        max_gap = self.params['max_gap']
         max_length = self.params['max_length']
         min_hits = self.params['min_hits']
         min_covered_queries = self.params['min_cov_qrs']
@@ -487,7 +488,7 @@ class Search:
         close_groups = []
         for group, hits in grouped_scaffs.items():
             dists = {pair: Hit.distance(*pair) for pair in it.combinations(hits, 2)}
-            dists = {k:v for k,v in dists.items() if v <= gap}
+            dists = {k:v for k,v in dists.items() if v <= max_gap}
             close_groups.append(list(dists.keys()))
         if len(close_groups) == 0:
             print("No cluster could be identified!")
@@ -694,26 +695,27 @@ class Search:
         
     
 # Queries
-query = {'query1': '/home/lucas/bin/cfoldseeker_old/AF3_models/fold_sco5088_model_0.cif',
-         'query2': '/home/lucas/bin/cfoldseeker_old/AF3_models/fold_sco5089_model_0.cif'
+query = {
+         'rre': '/home/lucas/bin/cfoldseeker/test/prot2.cif',
+         'rre+1': '/home/lucas/bin/cfoldseeker/test/prot3.cif'
          }
     
 # Search parameters
-params = {'mode': 'local',
-          'db': ('afdb-proteome', 'afdb-swissprot'),
+params = {'mode': 'remote',
+          'db': ['afdb-proteome', 'afdb-swissprot'],
           'max_eval': 1,
           'min_prob': 0,
           'min_score': 0,
-          'min_seqid': 25,
-          'min_qcov': 70,
-          'gap': 1000,
-          'max_length': 20000,
+          'min_seqid': 0,
+          'min_qcov': 0,
+          'max_gap': 5000,
+          'max_length': 50000,
           'min_hits': 2,
           'min_cov_qrs': 2,
           'require': []
         }
     
-s = Search(query, "uniprot_kegg_nucl.gz", params = params)
+s = Search(query, "uniprot_kegg_genpept.gz", params = params)
 s.run_foldseek()
 s.parse_foldseek_results()
 s.crossref()
