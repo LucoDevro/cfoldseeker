@@ -9,7 +9,7 @@ from classes import Search, Hit
 
 class LocalSearch(Search):
     
-    def __init__(self, query, db_path, coord_db_path, tmp, db_prefix = "localDB", params = {}, hits = [], clusters = []):
+    def __init__(self, query, db_path, coord_db_path, tmp, db_prefix = "local_db", params = {}, hits = [], clusters = []):
         
         super().__init__(query, params, hits, clusters)
         
@@ -33,7 +33,8 @@ class LocalSearch(Search):
         """
         
         cmd = ['foldseek', 'createdb', str(self.db_path) + '/', self.db_prefix,
-               '-v', '1']
+               '-v', '1',
+               '--threads', self.params['cores']]
         subprocess.run(cmd, check = True)
         
         return None
@@ -50,7 +51,8 @@ class LocalSearch(Search):
                '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,prob,evalue,bits',
                '-v', '1',
                "--min-seq-id", str(self.params['min_seqid']),
-               '-e', str(self.params['max_eval'])
+               '-e', str(self.params['max_eval']),
+               '--threads', self.params['cores']
                ]
         subprocess.run(cmd, check = True)
         
@@ -103,7 +105,7 @@ class LocalSearch(Search):
                       name = result['name'],
                       taxon_name = result['taxon_name'],
                       taxon_id = result['taxon_id'],
-                      db = "local",
+                      db = ["local"],
                       crossref_method = 'local',
                       evalue = result["evalue"],
                       prob = result['prob'],

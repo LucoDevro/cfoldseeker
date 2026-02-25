@@ -175,8 +175,8 @@ class Search(ABC):
     def __init__(self, query, params = {}, hits = [], clusters = []):
         
         # default params
-        self.DEFAULTS = {'mode': 'local',
-                        'db': ('afdb-proteome', 'afdb-swissprot', 'afdb50'),
+        self.DEFAULTS = {'mode': 'remote',
+                        'db': ['afdb-proteome', 'afdb-swissprot', 'afdb50'],
                         'max_eval': 1,
                         'min_prob': 0,
                         'min_score': 0,

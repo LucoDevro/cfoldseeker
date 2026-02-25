@@ -85,12 +85,12 @@ class RemoteSearch(Search):
         
         # First submit all query proteins to FoldSeek
         query_foldseek = lambda x: submit_foldseek_query(x, self.params['db'])
-        with ThreadPoolExecutor(max_workers = 5) as executor:
+        with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             tickets = dict(zip(self.query.keys(), executor.map(query_foldseek, self.query.values())))
                 
         # Then wait for the results and retrieve them automatically when completed
         all_job_ids = [ticket['id'] for ticket in tickets.values()]
-        with ThreadPoolExecutor(max_workers = 5) as executor:
+        with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             all_results = dict(zip(self.query.keys(), executor.map(retrieve_foldseek_results, all_job_ids)))
         
         self.hits = all_results
@@ -364,7 +364,7 @@ class RemoteSearch(Search):
         processed_hits = []
         ## Get the scaffold and genome positions for the KEGG crossreffing method
         ## Pull all KEGG Gene and Genome records
-        pull = MultiProcessMultiplePull(n_workers = 20)
+        pull = MultiProcessMultiplePull(n_workers = self.params['max_workers'])
         # KEGG Gene IDs
         all_kegg_gene_ids = list({h.crossref_id for h in all_afdb_hits if h.crossref_method == 'KEGG'})
         _, gene_records = pull.pull_dict(all_kegg_gene_ids)
@@ -394,7 +394,7 @@ class RemoteSearch(Search):
         ## Get the scaffold and genome positions for the GenPept crossreffing method
         ## Pull all GenPept records from ENA in EMBL format
         all_genpept_gene_ids = list({h.crossref_id for h in all_afdb_hits if h.crossref_method == "GenPept"})
-        with ThreadPoolExecutor(max_workers = 20) as executor:
+        with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             ena_records = dict(zip(all_genpept_gene_ids, executor.map(pull_from_ena, all_genpept_gene_ids)))
             
         ## Extract scaffold and coordinate information from the pulled ENA records
