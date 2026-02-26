@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from classes import Hit, Search, _sanitise_hit_attr
-
 import re
 import time
 import sys
 import requests
+import json
 import io
 import polars as pl
 import itertools as it
 from concurrent.futures import ThreadPoolExecutor
 from kegg_pull.pull import MultiProcessMultiplePull
 from Bio import SeqIO
+
+from classes import Hit, Search, _sanitise_hit_attr
 
 
 class RemoteSearch(Search):
@@ -41,12 +42,14 @@ class RemoteSearch(Search):
         """
         Submits one structure file to the FoldSeek API and returns the submission ticket in dictionary form.
         """
-        def submit_foldseek_query(query_path, dbs):
+        def submit_foldseek_query(query_path, dbs, taxfilters):
             with open(query_path, "rb") as f:
                 files = {"q": f}
                 data = [("mode", "3diaa")]
                 for db in dbs:
                     data.append(("database[]", db))
+                for taxfilt in taxfilters:
+                    data.append(('taxfilter', taxfilt))
                 response = requests.post(FOLDSEEK_SUBMISSION_URL, files=files, data=data)
                 if response.status_code == 200:
                     return response.json()
@@ -84,7 +87,7 @@ class RemoteSearch(Search):
             
         
         # First submit all query proteins to FoldSeek
-        query_foldseek = lambda x: submit_foldseek_query(x, self.params['db'])
+        query_foldseek = lambda x: submit_foldseek_query(x, self.params['db'], self.params['taxfilters'])
         with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             tickets = dict(zip(self.query.keys(), executor.map(query_foldseek, self.query.values())))
                 
@@ -94,6 +97,10 @@ class RemoteSearch(Search):
             all_results = dict(zip(self.query.keys(), executor.map(retrieve_foldseek_results, all_job_ids)))
         
         self.hits = all_results
+        
+        for query,result in all_results.items():
+            with open((self.TEMP_DIR / f"foldseek_result_{query}").with_suffix('.json'), "w") as handle:
+                json.dump(result, handle)
         
         return None
     
@@ -429,15 +436,7 @@ class RemoteSearch(Search):
         afdb_hits = self.crossref_afdb()
         self.hits = afdb_hits
         self.identify_clusters()
-        session = self.generate_cblaster_session()
         
-        with open("test_session.json", "w") as handle:
-            session.to_json(fp = handle)
-            
-        with open('test_summary', 'w') as handle:
-            session.format(form = "summary", fp = handle)
-            
-        with open('test_binary', 'w') as handle:
-            session.format(form = "binary", fp = handle)
-            
+        return None
+        
     

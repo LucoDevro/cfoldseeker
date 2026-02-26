@@ -9,16 +9,14 @@ from classes import Search, Hit
 
 class LocalSearch(Search):
     
-    def __init__(self, query, db_path, coord_db_path, tmp, db_prefix = "local_db", params = {}, hits = [], clusters = []):
+    def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = []):
         
         super().__init__(query, params, hits, clusters)
         
         self.db_path = db_path
-        self.db_prefix = db_prefix
-        self.tmp = tmp
         
         self.coord_db = pl.scan_csv(coord_db_path, has_header = False, separator = "\t", 
-                                    new_columns = ['gene_tag', 'file', 'name', 'contig', 'coords',
+                                    new_columns = ['gene_tag', 'name', 'contig', 'coords',
                                                    'strand', 'taxon_id', 'taxon_name'])
         
         return None
@@ -27,25 +25,16 @@ class LocalSearch(Search):
         return f"Local Search of {','.join(list(self.query.keys()))} with {len(self.clusters)} clusters identified"
     
     
-    def make_foldseek_db(self):
-        """
-        Makes a FoldSeek DB of the local structure database
-        """
-        
-        cmd = ['foldseek', 'createdb', str(self.db_path) + '/', self.db_prefix,
-               '-v', '1',
-               '--threads', self.params['cores']]
-        subprocess.run(cmd, check = True)
-        
-        return None
-    
-    
     def run_foldseek(self):
         """
         Runs FoldSeek on the local DB.
         """
         
-        cmd = ['foldseek', 'easy-search', ' '.join(self.query.values()), self.db_prefix, 'result.m8', self.tmp,
+        cmd = ['foldseek', 'easy-search', 
+               ' '.join(self.query.values()), 
+               self.db_path,
+               self.TEMP_DIR / 'foldseek_result.txt',
+               self.TEMP_DIR / 'foldseek_tmp',
                "--format-mode", '4',
                "--input-format", '2',
                '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,prob,evalue,bits',
@@ -71,7 +60,7 @@ class LocalSearch(Search):
         min_tcov = self.params['min_tcov']
         
         ## Parse results table
-        results = pl.scan_csv('result.m8', has_header = True, separator = "\t")
+        results = pl.scan_csv(self.TEMP_DIR / 'foldseek_result.txt', has_header = True, separator = "\t")
         
         ## Convert tcov and qcov to percentages
         results = results.with_columns([pl.col("qcov") * 100, pl.col('tcov') * 100])
@@ -124,21 +113,14 @@ class LocalSearch(Search):
     
     
     def run(self):
-        self.make_foldseek_db()
+        """
+        Complete local search workflow run
+        """
+        
         self.run_foldseek()
         self.parse_foldseek_results()
         self.identify_clusters()
-        session = self.generate_cblaster_session()
-        
-        with open("test_session_local.json", "w") as handle:
-            session.to_json(fp = handle)
-            
-        with open('test_summary_local', 'w') as handle:
-            session.format(form = "summary", fp = handle)
-            
-        with open('test_binary_local', 'w') as handle:
-            session.format(form = "binary", fp = handle)
         
         return None
-    
+        
     

@@ -8,6 +8,8 @@ import polars as pl
 import networkx as nx
 from abc import ABC, abstractmethod
 from copy import deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from cblaster.classes import Session
 
@@ -27,7 +29,7 @@ class Hit:
         self.crossref_method: str = crossref_method #Method used for crossreffing (either KEGG or GenPept)
         
         # FoldSeek hit properties
-        self.name: list = name #name of the hit in the KEGG entry
+        self.name: list = name #annotation
         self.taxon_name: str = taxon_name #name of the taxon in which this hit was found
         self.taxon_id: int = taxon_id
         self.evalue: float = evalue #evalue of the FoldSeek hit
@@ -44,6 +46,25 @@ class Hit:
     
     def __repr__(self):
         return f"{self.query} Hit {self.db_id}\t {self.scaff} {self.start()}-{self.end()} ({self.strand})"
+    
+    def as_dict(self):
+        return {'query': self.query,
+                'db_id': self.db_id,
+                'db': self.db,
+                'crossref_id': self.crossref_id,
+                'crossref_method': self.crossref_method,
+                'name': self.name,
+                'taxon_name': self.taxon_name,
+                'taxon_id': self.taxon_id,
+                'evalue': self.evalue,
+                'prob': self.prob,
+                'score': self.score,
+                'seqid': self.seqid,
+                'qcov': self.qcov,
+                'tcov': self.tcov,
+                'scaff': self.scaff,
+                'coords': ','.join(self.coords),
+                'strand': self.strand}
     
     # Returns start coordinate of the first exon
     def start(self):
@@ -128,8 +149,19 @@ class Cluster:
         return None
     
     def __repr__(self):
-        
         return f"Cluster {self.number}: {len(self.hits)} proteins from {self.scaff} ({self.start} - {self.end}), ({self.strand})\tScore: {self.score}"
+    
+    def as_dict(self):
+        return {'hits': ','.join([h.db_id for h in self.hits]),
+                'number': self.number,
+                'score': self.score,
+                'start': self.start,
+                'end': self.end,
+                'length': self.length,
+                'strand': self.strand,
+                'scaff': self.scaff,
+                'taxon_id': self.taxon_id,
+                'taxon_name': self.taxon_name}
     
 
 def _sanitise_hit_attr(hits: list, attr: str) -> list:
@@ -172,31 +204,16 @@ def _sanitise_hit_attr(hits: list, attr: str) -> list:
 
 class Search(ABC):
     
-    def __init__(self, query, params = {}, hits = [], clusters = []):
-        
-        # default params
-        self.DEFAULTS = {'mode': 'remote',
-                        'db': ['afdb-proteome', 'afdb-swissprot', 'afdb50'],
-                        'max_eval': 1,
-                        'min_prob': 0,
-                        'min_score': 0,
-                        'min_seqid': 25,
-                        'min_qcov': 70,
-                        'min_tcov': 70,
-                        'max_gap': 1000,
-                        'max_length': 20000,
-                        'min_hits': 2,
-                        'min_cov_qrs': 2,
-                        'require': []
-                        }
+    def __init__(self, query, params = {}, hits = [], clusters = [], output_folder = Path('.'), temp_folder = Path('.')):
         
         self.query: list = query # dictionary of query names as keys and structure filepaths as values
-        if len(params) == 0:
-            self.params = self.DEFAULTS
-        else:
-            self.params: dict = params # dictionary containing the search configuration
+        self.params: dict = params # dictionary containing the search configuration
         self.hits: list = hits # list of Hit objects
         self.clusters: list = clusters # list of Cluster objects
+        
+        self.OUTPUT_DIR = output_folder
+        self.TEMP_DIR_CONTEXT: TemporaryDirectory = TemporaryDirectory(dir = temp_folder, delete = False)
+        self.TEMP_DIR = Path(self.TEMP_DIR_CONTEXT.name)
         
         return None
     
@@ -303,10 +320,10 @@ class Search(ABC):
         # Minimum number of covered queries and required queries
         covered_queries = [{h.query for h in cl} for cl in clusters_filt]
         clusters_filt = [cl for cl,qrs in zip(clusters_filt, covered_queries)
-                        if len(qrs) >= min_covered_queries and set(require) <= qrs]
+                         if len(qrs) >= min_covered_queries and set(require) <= qrs]
         
         ### Create the Cluster objects from the filtered hit clusters
-        res_objects = [Cluster(list(cl), number = idx) for idx,cl in enumerate(clusters_filt)]
+        res_objects = [Cluster(cl, number = idx) for idx,cl in enumerate(clusters_filt)]
         
         ### Filter for maximum cluster length
         res_objects_filt = [cl for cl in res_objects if cl.length <= max_length]
@@ -316,10 +333,34 @@ class Search(ABC):
         for idx,cl in enumerate(res_objects_filt):
             cl.number = idx+1
         
+        ### Save
         self.clusters = res_objects_filt
+        
+        ### Update the hits attribute after filtering at cluster level
+        self.hits = [h for cl in self.clusters for h in cl.hits]
         
         return None
    
+    
+    def generate_tables(self, output_folder):
+        """
+        Saves the hit and cluster lists in separate overview tables.
+        """
+        # First the hits
+        all_hit_data = [h.as_dict() for h in self.hits]
+        all_hit_data_df = pl.DataFrame(all_hit_data, schema = ['db_id', 'query', 'scaff', 'strand', 'coords', 'db', 'crossref_id',
+                                                               'crossref_method', 'name', 'taxon_name', 'taxon_id', 'evalue', 
+                                                               'prob', 'score', 'seqid', 'qcov', 'tcov'])
+        all_hit_data_df.write_csv(output_folder / 'hits.tsv', include_header = True, separator = "\t")
+        
+        # Then the clusters
+        all_cluster_data = [cl.as_dict() for cl in self.clusters]
+        all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'scaff', 'strand',
+                                                                       'taxon_name', 'taxon_id', 'hits'])
+        all_cluster_data_df.write_csv(output_folder / 'clusters.tsv', include_header = True, separator = "\t")
+        
+        return None
+    
     
     def generate_cblaster_session(self):
         """
