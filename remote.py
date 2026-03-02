@@ -9,6 +9,7 @@ import json
 import io
 import polars as pl
 import itertools as it
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from kegg_pull.pull import MultiProcessMultiplePull
 from Bio import SeqIO
@@ -18,9 +19,10 @@ from classes import Hit, Search, _sanitise_hit_attr
 
 class RemoteSearch(Search):
     
-    def __init__(self, query, mapping_table_path, params = {}, hits = [], clusters = []):
+    def __init__(self, query, mapping_table_path, params = {}, hits = [], clusters = [], 
+                 output_folder = Path('.'), temp_folder = Path('.')):
         
-        super().__init__(query, params, hits, clusters)
+        super().__init__(query, params, hits, clusters, output_folder, temp_folder)
         
         self.mapping_table: dict = pl.scan_csv(mapping_table_path, has_header = False, separator = "\t",
                                                new_columns = ['Uniprot', 'DB', 'ID'])
@@ -112,7 +114,6 @@ class RemoteSearch(Search):
         
         ## Load the thresholds from params
         max_eval = self.params['max_eval']
-        min_prob = self.params['min_prob']
         min_score = self.params['min_score']
         min_seqid = self.params['min_seqid']
         min_qcov = self.params['min_qcov']
@@ -136,7 +137,6 @@ class RemoteSearch(Search):
                     taxon_name = hit_entry['taxName'] # taxon name
                     taxon_id = hit_entry['taxId'] # taxon ID
                     evalue = float(hit_entry['eval']) # FoldSeek e-value
-                    prob = float(hit_entry['prob']) # FoldSeek probability score
                     score = int(hit_entry['score']) # FoldSeek hit score
                     seqid = float(hit_entry['seqId']) # Sequence identity with the query protein
                     qcov = (int(hit_entry['qEndPos']) - int(hit_entry['qStartPos'])) / int(hit_entry['qLen']) * 100 # Query coverage
@@ -144,13 +144,12 @@ class RemoteSearch(Search):
                     
                     # Create Hit object and collect it if it passes all thresholds
                     if all((evalue <= max_eval, 
-                            prob >= min_prob, 
                             score >= min_score, 
                             seqid >= min_seqid, 
                             qcov >= min_qcov, 
                             tcov >= min_tcov)):
                         hit = Hit(db_id, query, name = name, taxon_name = taxon_name, taxon_id = taxon_id, db = db,
-                                  evalue = evalue, prob = prob, score = score, seqid = seqid, qcov = qcov, tcov = tcov)
+                                  evalue = evalue, score = score, seqid = seqid, qcov = qcov, tcov = tcov)
                         all_hits.append(hit)
                         
         if len(all_hits) == 0:

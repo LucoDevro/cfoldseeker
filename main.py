@@ -48,7 +48,7 @@ def getArguments():
     args_io.add_argument('-q', '--query', dest = 'query_folder', required = True, type = Path, help = "Path of the folder containing the query proteins.")
     args_io.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('.'), help = "Output directory (default: current location)")
     args_io.add_argument('-t', '--temp', dest = "temp", type = Path, default = tempfile.gettempdir(), help = "Path to store temporary files (default: your OS's default temporary directory).")
-    args_io.add_argument('--tables', dest = 'output_tables', default = True, action = 'store_false', help = "Write overview tables (default: True).")
+    args_io.add_argument('--no-tables', dest = 'output_tables', default = True, action = 'store_false', help = "Don't write overview tables (default: false).")
     args_io.add_argument('--session', dest = 'output_session', default = False, action = 'store_true', help = "Write cblaster session file (default: false).")
     args_io.add_argument('--summary', dest = 'output_summary', default = False, action = 'store_true', help = "Write cblaster summary file (default: false).")
     args_io.add_argument('--binary', dest = 'output_binary', default = False, action = 'store_true', help = "Write cblaster binary file (tab-separated) (default: false).")
@@ -59,7 +59,6 @@ def getArguments():
 
     args_search = parser.add_argument_group('General search options')
     args_search.add_argument('--max-eval', dest = "max_eval", type = float, default = 1e-3, help = "Maximum e-value to include a FoldSeek hit.")
-    args_search.add_argument('--min-prob', dest = "min_prob", type = float, default = 0, help = "Minimum FoldSeek probability to include a hit (range: 0-1).")
     args_search.add_argument('--min-score', dest = "min_score", type = float, default = 0, help = "Minimum FoldSeek bitscore to include a hit.")
     args_search.add_argument('--min-seqid', dest = "min_seqid", type = float, default = 0, help = "Minimum sequence identity to include a hit (in percentages).")
     args_search.add_argument('--min-qcov', dest = "min_qcov", type = float, default = 0, help = "Minimum query coverage to include a hit (in percentages).")
@@ -71,7 +70,7 @@ def getArguments():
     args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filename stems as labels).")
     
     args_remote = parser.add_argument_group("Remote-specific search options")
-    args_remote.add_argument('-db', '--database', dest = 'db', type = str, default = 'local', nargs = '*', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
+    args_remote.add_argument('-db', '--database', dest = 'db', type = str, default = ['local'], nargs = '*', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
                              help = "Target database to include (choices: afdb-proteome, afdb-swissprot, afdb50)")
     args_remote.add_argument('-tf', '--taxon-filter', dest = 'taxfilters', type = str, default = '', nargs = '*',
                              help = "Taxon ID(s) to filter the FoldSeek results table.")
@@ -83,7 +82,6 @@ def getArguments():
     args_local = parser.add_argument_group('Local-specific search options')
     args_local.add_argument('-ldb', '--local-database', dest = 'local_db_path', type = Path, default = Path('local_db'), help = "Path to your local FoldSeek DB folder (default: local_db).")
     args_local.add_argument('-cm', '--cds-mapping', dest = 'cds_mapping_table_path', type = Path, default = Path('local_db_cds.tsv'), help = "Path of the CDS coordinates mapping table of your local database (default: local_db_cds.tsv).")
-    args_local.add_argument('--foldseek-temp', dest = 'foldseek_temp', type = Path, default = Path('./tmp'), help = "Location that FoldSeek may use for its temporary files (default: tmp subfolder in the current folder)")
     
     args = parser.parse_args()
     
@@ -102,7 +100,6 @@ def parseArguments(args):
     assert args.max_workers > 0, 'Number of workers must be positive.'
     assert args.max_eval < 1 and args.max_eval > 0, 'Maximum e-value should be a number between 0 and 1.'
     assert args.min_seqid >= 0 and args.min_seqid <= 100, "Minimum sequence identity should be a percentage between 0 and 100."
-    assert args.min_prob >= 0 and args.min_prob <= 1, "Minimum hit probability score should be a number between 0 and 1."
     assert args.min_score >= 0, "Minimum FoldSeek bitscore should be a positive number."
     assert args.min_qcov >= 0 and args.min_qcov <= 100, "Minimum query coverage should be a percentage between 0 and 100."
     assert args.min_tcov >= 0 and args.min_tcov <= 100, "Minimum target coverage should be a percentage between 0 and 100."
@@ -113,14 +110,13 @@ def parseArguments(args):
     if args.mode == 'remote':
         assert args.mapping_table_path.exists() and args.mapping_table_path.is_file(), "UniProt mapping table path does not exist or is not a file."
     elif args.mode == 'local':
-        assert args.local_db_path.exists() and args.local_db_path.is_dir() and any(args.local_db_path.iterdir()), "Local FoldSeek DB does not seem to exist."
+        assert args.local_db_path.exists(), "Local FoldSeek DB does not seem to exist."
         assert args.cds_mapping_table_path.exists() and args.cds_mapping_table_path.is_file(), "CDS mapping table path does not exist or is not a file."
     
     params = {'mode': args.mode,
               'cores': args.cores,
               'max_workers': args.max_workers,
               'max_eval': args.max_eval,
-              'min_prob': args.min_prob,
               'min_score': args.min_score,
               'min_seqid': args.min_seqid,
               'min_qcov': args.min_qcov,
@@ -176,7 +172,7 @@ def main():
                                )
     elif parsed_args['params']['mode'] == 'local':
         the_run = LocalSearch(query = parsed_args['paths']['query'],
-                              db_path = parsed_args['paths']['local_db'],
+                              db_path = parsed_args['paths']['local_db_path'],
                               coord_db_path = parsed_args['paths']['cds_mapping'],
                               params = parsed_args['params'],
                               output_folder = parsed_args['paths']['output_folder'],
@@ -189,7 +185,7 @@ def main():
     the_run.run()
     
     # Generate requested output
-    if any(args.output_binary, args.output_clinker, args.output_plot, args.output_summary, args.output_session):
+    if any([args.output_binary, args.output_clinker, args.output_plot, args.output_summary, args.output_session]):
         cblaster_session = the_run.generate_cblaster_session()
         
         if args.output_session:
@@ -214,7 +210,7 @@ def main():
         
     if args.output_foldseek:
         for file in the_run.TEMP_DIR.glob('foldseek_result*'):
-            shutil.copy(the_run.TEMP_DIR / file, the_run.OUTPUT_DIR / file)
+            shutil.copy(file, the_run.OUTPUT_DIR / file.name)
     
     if args.output_tables:
         the_run.generate_tables(the_run.OUTPUT_DIR)

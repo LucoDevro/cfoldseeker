@@ -2,16 +2,19 @@
 # -*- coding: utf-8 -*-
 
 import re
+import sys
 import subprocess
 import polars as pl
+from pathlib import Path
 
 from classes import Search, Hit
 
 class LocalSearch(Search):
     
-    def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = []):
+    def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
+                 output_folder = Path('.'), temp_folder = Path('.')):
         
-        super().__init__(query, params, hits, clusters)
+        super().__init__(query, params, hits, clusters, output_folder, temp_folder)
         
         self.db_path = db_path
         
@@ -31,19 +34,20 @@ class LocalSearch(Search):
         """
         
         cmd = ['foldseek', 'easy-search', 
-               ' '.join(self.query.values()), 
-               self.db_path,
-               self.TEMP_DIR / 'foldseek_result.txt',
-               self.TEMP_DIR / 'foldseek_tmp',
+               *[str(q) for q in self.query.values()], 
+               str(self.db_path),
+               str(self.TEMP_DIR / 'foldseek_result.txt'),
+               str(self.TEMP_DIR / 'foldseek_tmp'),
                "--format-mode", '4',
                "--input-format", '2',
-               '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,prob,evalue,bits',
+               '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,evalue,bits',
                '-v', '1',
                "--min-seq-id", str(self.params['min_seqid']),
                '-e', str(self.params['max_eval']),
-               '--threads', self.params['cores']
+               '--threads', str(self.params['cores'])
                ]
         subprocess.run(cmd, check = True)
+        # process = subprocess.Popen(cmd, stdout = sys.stdout, stderr = sys.stderr)
         
         return None
     
@@ -54,7 +58,6 @@ class LocalSearch(Search):
         """
         
         ## Load the thresholds from params
-        min_prob = self.params['min_prob']
         min_score = self.params['min_score']
         min_qcov = self.params['min_qcov']
         min_tcov = self.params['min_tcov']
@@ -66,7 +69,6 @@ class LocalSearch(Search):
         results = results.with_columns([pl.col("qcov") * 100, pl.col('tcov') * 100])
         
         ## Filter hits
-        results = results.filter(pl.col('prob') >= min_prob)
         results = results.filter(pl.col('bits') >= min_score)
         results = results.filter(pl.col('qcov') >= min_qcov)
         results = results.filter(pl.col('tcov') >= min_tcov)
@@ -94,10 +96,9 @@ class LocalSearch(Search):
                       name = result['name'],
                       taxon_name = result['taxon_name'],
                       taxon_id = result['taxon_id'],
-                      db = ["local"],
+                      db = "local",
                       crossref_method = 'local',
                       evalue = result["evalue"],
-                      prob = result['prob'],
                       score = result["bits"],
                       seqid = result["pident"],
                       qcov = result["qcov"],

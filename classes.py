@@ -17,7 +17,7 @@ from cblaster.classes import Session
 class Hit:
     
     def __init__(self, db_id, query, crossref_id = [], crossref_method = '', name = '', 
-                 taxon_name = '', taxon_id = 0, db = "", evalue = 1, prob = 1, score = 0, 
+                 taxon_name = '', taxon_id = 0, db = "", evalue = 1, score = 0, 
                  seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = [], strand = ''):
         
         self.query: str = query #ID of the homologous query protein
@@ -33,7 +33,6 @@ class Hit:
         self.taxon_name: str = taxon_name #name of the taxon in which this hit was found
         self.taxon_id: int = taxon_id
         self.evalue: float = evalue #evalue of the FoldSeek hit
-        self.prob: float = prob #FoldSeek hit probability score
         self.score: int = score #FoldSeek score
         self.seqid: float = seqid #Sequence identity with the query protein
         self.qcov: float = qcov #Query coverage
@@ -57,13 +56,12 @@ class Hit:
                 'taxon_name': self.taxon_name,
                 'taxon_id': self.taxon_id,
                 'evalue': self.evalue,
-                'prob': self.prob,
                 'score': self.score,
                 'seqid': self.seqid,
                 'qcov': self.qcov,
                 'tcov': self.tcov,
                 'scaff': self.scaff,
-                'coords': ','.join(self.coords),
+                'coords': ','.join(['..'.join([str(i) for i in seq]) for seq in self.coords]),
                 'strand': self.strand}
     
     # Returns start coordinate of the first exon
@@ -350,7 +348,7 @@ class Search(ABC):
         all_hit_data = [h.as_dict() for h in self.hits]
         all_hit_data_df = pl.DataFrame(all_hit_data, schema = ['db_id', 'query', 'scaff', 'strand', 'coords', 'db', 'crossref_id',
                                                                'crossref_method', 'name', 'taxon_name', 'taxon_id', 'evalue', 
-                                                               'prob', 'score', 'seqid', 'qcov', 'tcov'])
+                                                               'score', 'seqid', 'qcov', 'tcov'])
         all_hit_data_df.write_csv(output_folder / 'hits.tsv', include_header = True, separator = "\t")
         
         # Then the clusters
