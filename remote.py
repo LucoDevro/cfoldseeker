@@ -7,6 +7,7 @@ import sys
 import requests
 import json
 import io
+import logging
 import polars as pl
 import itertools as it
 from pathlib import Path
@@ -16,6 +17,8 @@ from Bio import SeqIO
 
 from classes import Hit, Search, _sanitise_hit_attr
 
+LOG = logging.getLogger(__name__)
+
 
 class RemoteSearch(Search):
     
@@ -24,6 +27,7 @@ class RemoteSearch(Search):
         
         super().__init__(query, params, hits, clusters, output_folder, temp_folder)
         
+        LOG.debug(f'Scanning ID mapping table from {str(mapping_table_path)}')
         self.mapping_table: dict = pl.scan_csv(mapping_table_path, has_header = False, separator = "\t",
                                                new_columns = ['Uniprot', 'DB', 'ID'])
                 
@@ -52,11 +56,15 @@ class RemoteSearch(Search):
                     data.append(("database[]", db))
                 for taxfilt in taxfilters:
                     data.append(('taxfilter', taxfilt))
+                LOG.debug("Posting request on FoldSeek webserver {FOLDSEEK_SUBMISSION_URL}")
+                LOG.debug("using the following parameters:")
+                LOG.debug(f"'\n'.join{data}")
                 response = requests.post(FOLDSEEK_SUBMISSION_URL, files=files, data=data)
                 if response.status_code == 200:
+                    LOG.info('Query {query_path} successfully submitted!')
                     return response.json()
                 else:
-                    raise Exception(f"Error submitting query {query_path}!")
+                    LOG.exception(f"Error submitting query {query_path}!")
                     
             return None
         
@@ -65,6 +73,7 @@ class RemoteSearch(Search):
         """
         def check_query_status(job_id):
             url = f"{FOLDSEEK_SUBMISSION_URL}/{job_id}"
+            LOG.info(f'Checking out status of job {job_id}')
             results = requests.get(url).json()
             status = results['status']
             
@@ -78,17 +87,20 @@ class RemoteSearch(Search):
             while True:
                 status = check_query_status(job_id)
                 if status == "COMPLETE":
+                    LOG.info(f"Job {job_id} has completed! Downloading results...")
                     entry = 0
                     url = f"{FOLDSEEK_RESULTS_URL}/{job_id}/{entry}"
                     results = requests.get(url).json()
                     break
                 else:
-                    time.sleep(2)
+                    LOG.info(f"Job {job_id} has not completed yet. Waiting another 10 seconds...")
+                    time.sleep(10)
                     
             return results
             
         
         # First submit all query proteins to FoldSeek
+        LOG.info('Posting queries at FoldSeek webserver')
         query_foldseek = lambda x: submit_foldseek_query(x, self.params['db'], self.params['taxfilters'])
         with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             tickets = dict(zip(self.query.keys(), executor.map(query_foldseek, self.query.values())))
@@ -98,8 +110,11 @@ class RemoteSearch(Search):
         with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             all_results = dict(zip(self.query.keys(), executor.map(retrieve_foldseek_results, all_job_ids)))
         
+        LOG.info('FINISHED PART 1')
+        LOG.info('All queries have been processed and downloaded!')
         self.hits = all_results
         
+        LOG.info('Saving results in temporary files')
         for query,result in all_results.items():
             with open((self.TEMP_DIR / f"foldseek_result_{query}").with_suffix('.json'), "w") as handle:
                 json.dump(result, handle)
@@ -119,9 +134,17 @@ class RemoteSearch(Search):
         min_qcov = self.params['min_qcov']
         min_tcov = self.params['min_tcov']
         
+        LOG.debug('Applying the following hit filtering thresholds:')
+        LOG.debug(f'bitscore >= {min_score}')
+        LOG.debug(f'query coverage >= {min_qcov}')
+        LOG.debug(f'target coverage >= {min_tcov}')
+        LOG.debug(f'minimum sequence identity threshold >= {min_seqid}')
+        LOG.debug(f'maximum evalue threshold <= {max_eval}')
+        
         ## Parse the FoldSeek results
         all_hits = []
         for query, task in self.hits.items():
+            LOG.debug(f"Parsing FoldSeek results for {query}")
             for results_by_db in task['results']:
                 db = results_by_db['db']
                 for hit_entry in results_by_db['alignments'][0]:
@@ -131,7 +154,7 @@ class RemoteSearch(Search):
                     elif db == 'pdb100':
                         db_id = target[:4].upper() + '.' + target[22]
                     else:
-                        print(f"Unsupported DB ID: {target}")
+                        LOG.error(f"Unsupported DB ({db}) for ID {target}")
                         continue
                     name = ' '.join(target.split(' ')[1:])
                     taxon_name = hit_entry['taxName'] # taxon name
@@ -153,18 +176,18 @@ class RemoteSearch(Search):
                         all_hits.append(hit)
                         
         if len(all_hits) == 0:
-            print("No hits identified by FoldSeek!")
+            LOG.error("No hits identified by FoldSeek!")
             sys.exit()
             
         ## Filter out redundant hit instances of hits found in multiple databases
         # Group by Uniprot ID and DB to find potentially redundant hits
+        LOG.debug('Removing redundant hits found in multiple DBs')
         hit_db_groups = {}
         for hit in all_hits:
             if (hit.db_id, hit.db) in hit_db_groups.keys():
                 hit_db_groups[(hit.db_id, hit.db)].append(hit)
             else:
                 hit_db_groups[(hit.db_id, hit.db)] = [hit]
-        
         # Keep the first DB hit instance for every Uniprot-DB group
         filtered_hits = []
         all_hit_ids = {h.db_id for h in all_hits}
@@ -176,6 +199,9 @@ class RemoteSearch(Search):
         # Flatten out and save
         filtered_hits = list(it.chain(*filtered_hits))
         self.hits = filtered_hits
+        
+        LOG.info('FINISHED PART 2')
+        LOG.info(f'Found {len(filtered_hits)} gene hits.')
         
         return None
             
@@ -191,6 +217,8 @@ class RemoteSearch(Search):
             Effectively extracts a mapping dictionary from the full Uniprot crossref LazyFrame, linking the Uniprot ID (keys)
             with a list of one or more multiple crossrefs in the provided target database (values).
             """
+            LOG.debug(f"Preparing a mapping dictionary from UniProt to {db}")
+            
             res = self.mapping_table.filter(pl.col('Uniprot').is_in(all_uniprot_ids)
                                             ).filter(pl.col('DB') == db).drop('DB')
             res = res.group_by('Uniprot').all()
@@ -325,9 +353,12 @@ class RemoteSearch(Search):
             ENA_BROWSER_URL = "https://www.ebi.ac.uk/ena/browser/api/embl"
             
             url = f"{ENA_BROWSER_URL}/{entry}"
+            LOG.debug('Going to pull GenPept record from {url}')
             response = requests.get(url)
             if response.status_code == 200:
                 return response.text
+            else:
+                LOG.exception(f'Error pulling GenPept record {entry}')
             
             return None
             
@@ -337,8 +368,9 @@ class RemoteSearch(Search):
             
         ### Get the crossreffing IDs            
         ## First, try to get KEGG IDs
+        LOG.info('Searching crossrefs in KEGG')
         all_uniprot_ids = list({h.db_id for h in all_afdb_hits})
-        hits_without_kegg = []
+        hits_failed_kegg = []
         # Extract a mapping table for KEGG IDs from the Uniprot crossref mapping table
         all_uniprot_kegg = prepare_mapping_dict(all_uniprot_ids, 'KEGG')
         # Fill all KEGG IDs
@@ -347,12 +379,15 @@ class RemoteSearch(Search):
                 h.crossref_id = all_uniprot_kegg[h.db_id]
                 h.crossref_method = "KEGG"
             else:
-                hits_without_kegg.append(h)
+                hits_failed_kegg.append(h)
                 continue
+        LOG.info(f'{len(hits_failed_kegg)} hits have no crossref in KEGG.')
         
         ## Then, try to get GenPept IDs for the hits that did not get a KEGG ID.
-        uniprot_ids_without_kegg = list({h.db_id for h in hits_without_kegg})
-        all_uniprot_genpept = prepare_mapping_dict(uniprot_ids_without_kegg, 'EMBL-CDS')
+        LOG.info('Searching crossrefs in GenPept')
+        uniprot_ids_failed_kegg = list({h.db_id for h in hits_failed_kegg})
+        hits_failed_genpept = []
+        all_uniprot_genpept = prepare_mapping_dict(uniprot_ids_failed_kegg, 'EMBL-CDS')
         # Fill the GenPept IDs
         for h in all_afdb_hits:
             if h.db_id in all_uniprot_genpept.keys():
@@ -361,28 +396,38 @@ class RemoteSearch(Search):
                 h.crossref_id = genpept_id
                 h.crossref_method = "GenPept"
             else:
+                hits_failed_genpept.append(h)
                 continue
+        LOG.info(f'{len(hits_failed_genpept)} hits have no crossref in GenPept.')
             
         ## Split records with multiple crossrefs and discard the ones without crossref
+        LOG.debug("Sanitising the hit list")
         all_afdb_hits = _sanitise_hit_attr(all_afdb_hits, 'crossref_id')
         
         ### Do the actual crossreffing
+        LOG.info('Navigating the crossrefs')
         processed_hits = []
         ## Get the scaffold and genome positions for the KEGG crossreffing method
         ## Pull all KEGG Gene and Genome records
+        LOG.info("Pulling KEGG crossrefs")
         pull = MultiProcessMultiplePull(n_workers = self.params['max_workers'])
+        
         # KEGG Gene IDs
         all_kegg_gene_ids = list({h.crossref_id for h in all_afdb_hits if h.crossref_method == 'KEGG'})
+        LOG.debug(f'Going to pull {len(all_kegg_gene_ids)} KEGG Gene entries')
         _, gene_records = pull.pull_dict(all_kegg_gene_ids)
         # KEGG Genome IDs
         all_kegg_genome_ids = list({'genome:' + i.split(':')[0] for i in all_kegg_gene_ids})
+        LOG.debug(f'Going to pull {len(all_kegg_genome_ids)} KEGG Genome entries')
         _, genome_records = pull.pull_dict(all_kegg_genome_ids)
         genome_records = {k.split(':')[-1]: v for k,v in genome_records.items()}
         
         ## Extract scaffold and coordinate information from the pulled KEGG records
+        LOG.debug('Parsing downloaded KEGG entries')
         genomic_info = {k: extract_genomic_information_kegg(v) for k,v in gene_records.items()}
         scaffold_mappings = {k: extract_scaffold_mapping_kegg(v) for k,v in genome_records.items()}
         # Pass the extracted information on to the Hit objects
+        LOG.debug('Extract CDS coordinates')
         for h in all_afdb_hits:
             try:
                 position_info = genomic_info[h.crossref_id]
@@ -399,13 +444,17 @@ class RemoteSearch(Search):
                 
         ## Get the scaffold and genome positions for the GenPept crossreffing method
         ## Pull all GenPept records from ENA in EMBL format
+        LOG.info("Pulling GenPept crossrefs from ENA")
         all_genpept_gene_ids = list({h.crossref_id for h in all_afdb_hits if h.crossref_method == "GenPept"})
+        LOG.debug(f'Going to pull {len(all_genpept_gene_ids)} ENA GenPept entries')
         with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             ena_records = dict(zip(all_genpept_gene_ids, executor.map(pull_from_ena, all_genpept_gene_ids)))
             
         ## Extract scaffold and coordinate information from the pulled ENA records
+        LOG.debug("Parsing downloaded GenPept entries")
         genomic_info = {k: extract_genomic_information_ena(v) for k,v in ena_records.items()}
         # Pass the extracted information on the Hit objects
+        LOG.debug('Extract CDS coordinates')
         for h in all_afdb_hits:
             try:
                 position_info = genomic_info[h.crossref_id]
@@ -421,6 +470,8 @@ class RemoteSearch(Search):
         
         ### Update the hit set
         all_afdb_hits = processed_hits
+        LOG.info("FINISHED PART 2B")
+        LOG.info(f'{len(processed_hits)} hits have been processed.')
         
         return all_afdb_hits
     
@@ -430,10 +481,17 @@ class RemoteSearch(Search):
         Complete remote search workflow run
         """
         
+        LOG.info("STARTING PART 1: Executing FoldSeek search")
         self.run_foldseek()
+        
+        LOG.info("STARTING PART 2: Parsing FoldSeek results")
         self.parse_foldseek_results()
+        
+        LOG.info('STARTING PART 2B: Fetching CDS coordinates via crossreffing')
         afdb_hits = self.crossref_afdb()
         self.hits = afdb_hits
+        
+        LOG.info('STARTING PART 3: Identifying gene clusters')
         self.identify_clusters()
         
         return None

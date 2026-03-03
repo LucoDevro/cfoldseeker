@@ -3,11 +3,32 @@
 
 import re
 import sys
+import logging
+import threading
 import subprocess
+import shutil
 import polars as pl
 from pathlib import Path
 
 from classes import Search, Hit
+
+LOG = logging.getLogger(__name__)
+
+
+def _stream_reader(pipe, write_func):
+    try:
+        with pipe:
+            for chunk in iter(lambda: pipe.readline(), b''):
+                if not chunk:
+                    break
+                try:
+                    text = chunk.decode('utf-8', 'replace')
+                except Exception:
+                    text = chunk.decode('latin-1', 'replace')
+                write_func(text)
+    except Exception:
+        LOG.exception("stream reader error")
+        
 
 class LocalSearch(Search):
     
@@ -18,6 +39,7 @@ class LocalSearch(Search):
         
         self.db_path = db_path
         
+        LOG.debug(f"Scanning CDS DB from {coord_db_path}")
         self.coord_db = pl.scan_csv(coord_db_path, has_header = False, separator = "\t", 
                                     new_columns = ['gene_tag', 'name', 'contig', 'coords',
                                                    'strand', 'taxon_id', 'taxon_name'])
@@ -32,8 +54,17 @@ class LocalSearch(Search):
         """
         Runs FoldSeek on the local DB.
         """
+
+        foldseek_executable = shutil.which('foldseek')
+        foldseek_verbosity = str(min(self.params['verbosity'], 3))
         
-        cmd = ['foldseek', 'easy-search', 
+        LOG.debug(f"FoldSeek executable: {foldseek_executable}")
+        LOG.debug(f"FoldSeek target DB: {str(self.db_path)}")
+        LOG.debug(f"FoldSeek workdir: {str(self.TEMP_DIR / 'foldseek_tmp')}")
+        LOG.debug(f'Applying minimum sequence identity threshold >= {str(self.params["min_seqid"])}')
+        LOG.debug(f'Applying maximum evalue threshold <= {str(self.params["max_eval"])}')
+        
+        cmd = [foldseek_executable, 'easy-search', 
                *[str(q) for q in self.query.values()], 
                str(self.db_path),
                str(self.TEMP_DIR / 'foldseek_result.txt'),
@@ -41,15 +72,39 @@ class LocalSearch(Search):
                "--format-mode", '4',
                "--input-format", '2',
                '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,evalue,bits',
-               '-v', '1',
+               '-v', foldseek_verbosity,
                "--min-seq-id", str(self.params['min_seqid']),
                '-e', str(self.params['max_eval']),
                '--threads', str(self.params['cores'])
                ]
-        subprocess.run(cmd, check = True)
-        # process = subprocess.Popen(cmd, stdout = sys.stdout, stderr = sys.stderr)
         
-        return None
+        # Launching search process
+        LOG.debug(f'Running command: {" ".join(cmd)}')
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # Capture stdout and stderr in realtime and wrap it in the logs
+        def foldseek_stdout_log(s): return LOG.debug(s.rstrip())
+        def foldseek_stderr_log(s): return LOG.warning(s.rstrip())
+        
+        t_out = threading.Thread(target=_stream_reader, args=(proc.stdout, foldseek_stdout_log))
+        t_err = threading.Thread(target=_stream_reader, args=(proc.stderr, foldseek_stderr_log))
+        t_out.daemon = True
+        t_err.daemon = True
+        t_out.start()
+        t_err.start()
+    
+        returncode = proc.wait()
+        t_out.join()
+        t_err.join()
+    
+        # Wrap up
+        if returncode != 0:
+            LOG.critical("FoldSeek exited with code %s", returncode)
+        else:
+            LOG.info('FoldSeek finished successfully.')
+            LOG.info("FINISHED PART 1")
+    
+        return None        
     
     
     def parse_foldseek_results(self):
@@ -63,28 +118,38 @@ class LocalSearch(Search):
         min_tcov = self.params['min_tcov']
         
         ## Parse results table
+        LOG.debug(f"Scanning FoldSeek result table at {str(self.TEMP_DIR / 'foldseek_result.txt')}")
         results = pl.scan_csv(self.TEMP_DIR / 'foldseek_result.txt', has_header = True, separator = "\t")
         
         ## Convert tcov and qcov to percentages
         results = results.with_columns([pl.col("qcov") * 100, pl.col('tcov') * 100])
         
         ## Filter hits
+        LOG.debug('Applying the following hit filtering thresholds:')
+        LOG.debug(f'bitscore >= {min_score}')
+        LOG.debug(f'query coverage >= {min_qcov}')
+        LOG.debug(f'target coverage >= {min_tcov}')
+        
         results = results.filter(pl.col('bits') >= min_score)
         results = results.filter(pl.col('qcov') >= min_qcov)
         results = results.filter(pl.col('tcov') >= min_tcov)
         
         ## Join with coordinates DB
+        LOG.info('Fetching CDS coordinates from local CDS DB')
         results = results.join(self.coord_db, left_on = 'target', right_on = 'gene_tag', maintain_order = "left_right")
         
         ## Discard the alignment coordinates columns
         results = results.drop("tstart", "tend", "qstart", "qend")
         
-        ## Materialise the LazyFrame and turn into a row iterator
-        results = results.collect().iter_rows(named = True)
+        ## Materialise the LazyFrame
+        results = results.collect()
+        LOG.info(f"Found {results.height} gene hits.")
 
         ## Generate the Hit objects
+        LOG.debug('Generating the Hit objects')
+        results_it = results.iter_rows(named = True)
         all_hits = []
-        for result in results:
+        for result in results_it:
             # Parse the genomic coordinates on the fly
             coord_groups = re.findall(r'\d+\.\.\d+', result['coords'])
             coord_groups = [i.split('..') for i in coord_groups]
@@ -110,6 +175,9 @@ class LocalSearch(Search):
         
         self.hits = all_hits
         
+        LOG.info('FINISHED PART 2')
+        LOG.info(f'{len(all_hits)} hits have been processed.')
+        
         return None
     
     
@@ -118,8 +186,13 @@ class LocalSearch(Search):
         Complete local search workflow run
         """
         
+        LOG.info('STARTING PART 1: Executing FoldSeek search')
         self.run_foldseek()
+        
+        LOG.info("STARTING PART 2: Parsing FoldSeek results")
         self.parse_foldseek_results()
+        
+        LOG.info("STARTING PART 3: Identifying gene clusters")
         self.identify_clusters()
         
         return None

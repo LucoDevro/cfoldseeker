@@ -5,6 +5,7 @@ import argparse
 import sys
 import tempfile
 import shutil
+import logging
 from pathlib import Path
 from cblaster.plot import plot_session
 from cblaster.plot_clusters import plot_clusters
@@ -15,6 +16,8 @@ from remote import RemoteSearch
 from local import LocalSearch
 
 # __version__ = version("cfoldseeker")
+
+LOG = logging.getLogger()
 
 
 def getArguments():
@@ -42,7 +45,8 @@ def getArguments():
     args_general.add_argument('-c', '--cores', dest = 'cores', default = 1, type = int, help = "Number of cores available to use (default: 1)")    
     # args_general.add_argument('-v', '--version', action = "version", version = "%(prog)s " + __version__)
     args_general.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
-    args_general.add_argument('--verbose', dest = 'verbose', default = False, action = 'store_true', help = "Enable verbose logging")
+    args_general.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4], help = "Console verbosity level (default: 3 (info))")
+    args_general.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', help = "Force overwriting output (default: false).")
     
     args_io = parser.add_argument_group('Inputs and outputs')
     args_io.add_argument('-q', '--query', dest = 'query_folder', required = True, type = Path, help = "Path of the folder containing the query proteins.")
@@ -54,7 +58,7 @@ def getArguments():
     args_io.add_argument('--binary', dest = 'output_binary', default = False, action = 'store_true', help = "Write cblaster binary file (tab-separated) (default: false).")
     args_io.add_argument('--plot', dest = 'output_plot', default = False, action = 'store_true', help = "Write cblaster clusterplot file (default: false).")
     args_io.add_argument('--clinker', dest = 'output_clinker', default = False, action = 'store_true', help = "Write clinker plot file (default: false).")
-    args_io.add_argument('--foldseek-file', dest = 'output_foldseek', default = False, action = 'store_true', 
+    args_io.add_argument('--foldseek', dest = 'output_foldseek', default = False, action = 'store_true', 
                          help = "Save FoldSeek output. In remote mode, this is the raw json from the FoldSeek webserver. In local mode, this is a BLAST-like tabular text file. (default: false).")
 
     args_search = parser.add_argument_group('General search options')
@@ -67,11 +71,11 @@ def getArguments():
     args_search.add_argument('--max-length', dest = "max_length", type = int, default = 100000, help = "Maximum genomic length of a cluster (in bp).")
     args_search.add_argument('--min-hits', dest = "min_hits", type = int, default = 0, help = "Minimum number of members in a cluster.")
     args_search.add_argument('--min-cov-qrs', dest = "min_cov_qrs", type = int, default = 0, help = "Minimum different queries covered by a cluster.")
-    args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filename stems as labels).")
+    args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filenames without extensions).")
     
     args_remote = parser.add_argument_group("Remote-specific search options")
-    args_remote.add_argument('-db', '--database', dest = 'db', type = str, default = ['local'], nargs = '*', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
-                             help = "Target database to include (choices: afdb-proteome, afdb-swissprot, afdb50)")
+    args_remote.add_argument('-db', '--database', dest = 'db', type = str, default = ['afdb50'], nargs = '+', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
+                             help = "Remote target database (default: afdb50) (choices: afdb-proteome, afdb-swissprot, afdb50)")
     args_remote.add_argument('-tf', '--taxon-filter', dest = 'taxfilters', type = str, default = '', nargs = '*',
                              help = "Taxon ID(s) to filter the FoldSeek results table.")
     # args_remote.add_argument('-uma', '--uniprot-mapping', dest = 'mapping_table_path', type = Path, default = Path(resources.files(__name__)) / 'uniprot_kegg_genpept.gz',
@@ -108,13 +112,30 @@ def parseArguments(args):
     assert args.min_hits >= 0, "Minimum number of hits in a cluster should be a positive number."
     assert args.min_cov_qrs >= 0, "Minimum number of covered queries in a cluster should be a positive number."
     if args.mode == 'remote':
+        db = args.db
         assert args.mapping_table_path.exists() and args.mapping_table_path.is_file(), "UniProt mapping table path does not exist or is not a file."
     elif args.mode == 'local':
+        db = ["local"]
         assert args.local_db_path.exists(), "Local FoldSeek DB does not seem to exist."
         assert args.cds_mapping_table_path.exists() and args.cds_mapping_table_path.is_file(), "CDS mapping table path does not exist or is not a file."
     
+    # Configure the logger
+    log_levels = {0: logging.CRITICAL,
+                  1: logging.ERROR,
+                  2: logging.WARNING,
+                  3: logging.INFO,
+                  4: logging.DEBUG
+                  }
+    logging.basicConfig(
+        level = log_levels[args.verbosity],
+        format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
+        datefmt="%H:%M:%S"
+        )
+    
+    # Parse the arguments
     params = {'mode': args.mode,
               'cores': args.cores,
+              'verbosity': args.verbosity,
               'max_workers': args.max_workers,
               'max_eval': args.max_eval,
               'min_score': args.min_score,
@@ -126,7 +147,7 @@ def parseArguments(args):
               'min_hits': args.min_hits,
               'min_cov_qrs': args.min_cov_qrs,
               'require': args.require,
-              'db': args.db,
+              'db': db,
               'taxfilters': args.taxfilters
               }
     
@@ -137,8 +158,23 @@ def parseArguments(args):
              'output_folder' : args.output.resolve(),
              'temp_folder': args.temp.resolve()
              }
-    paths['output_folder'].mkdir(parents = True, exist_ok = True)
-    paths['temp_folder'].mkdir(parents = True, exist_ok = True)
+    try:
+        paths['output_folder'].mkdir(parents = True)
+    except FileExistsError:
+        if args.force:
+            LOG.warning('Output folder already exists, but it will be overwritten.')
+        else:
+            LOG.error('Output folder already exists! Rerun with -f to overwrite it.')
+            sys.exit()
+    try:
+        paths['temp_folder'].mkdir(parents = True)
+    except FileExistsError:
+        if args.force:
+            LOG.warning('Temporary folder already exists, but it will be overwritten.')
+        else:
+            LOG.error('Temporary folder already exists! Rerun with -f to overwrite it.')
+            sys.exit() 
+
     
     output_flags = {'tables': args.output_tables,
                     'session': args.output_session,
@@ -164,6 +200,7 @@ def main():
     
     # Then we initiate the right workflow
     if parsed_args['params']['mode'] == 'remote':
+        LOG.info("Setting up cfoldseeker in remote mode")
         the_run = RemoteSearch(query = parsed_args['paths']['query'],
                                mapping_table_path = parsed_args['paths']['uniprot_mapping'],
                                params = parsed_args['params'],
@@ -171,6 +208,7 @@ def main():
                                temp_folder = parsed_args['paths']['temp_folder']
                                )
     elif parsed_args['params']['mode'] == 'local':
+        LOG.info("Setting up cfoldseeker in local mode")
         the_run = LocalSearch(query = parsed_args['paths']['query'],
                               db_path = parsed_args['paths']['local_db_path'],
                               coord_db_path = parsed_args['paths']['cds_mapping'],
@@ -179,44 +217,72 @@ def main():
                               temp_folder = parsed_args['paths']['temp_folder']
                               )
     else:
-        sys.exit("Invalid search mode!")
+        LOG.critical("Invalid search mode!")
+        LOG.info(f"Search mode requestd: {parsed_args['params']['mode']}")
+        sys.exit()
     
-    # Run the workflow
+    # Run the workflow    
+    LOG.info("STARTING SEARCH")
     the_run.run()
     
     # Generate requested output
     if any([args.output_binary, args.output_clinker, args.output_plot, args.output_summary, args.output_session]):
+        LOG.info("Generating cblaster session")
         cblaster_session = the_run.generate_cblaster_session()
         
         if args.output_session:
-            with open(the_run.OUTPUT_DIR / "session.json", "w") as handle:
+            LOG.info("Writing cblaster session file")
+            path = the_run.OUTPUT_DIR / "session.json"
+            with open(path, "w") as handle:
                 cblaster_session.to_json(fp = handle)
+            LOG.debug(f'cblaster session file written at {str(path)}')
         
         if args.output_summary:
-            with open(the_run.OUTPUT_DIR / 'summary.txt', 'w') as handle:
+            LOG.info("Writing cblaster summary file")
+            path = the_run.OUTPUT_DIR / 'summary.txt'
+            with open(path, 'w') as handle:
                 cblaster_session.format(form = "summary", fp = handle)
+            LOG.debug(f'cblaster summary file written at {str(path)}')
             
         if args.output_binary:
-            with open(the_run.OUTPUT_DIR / 'binary.txt', 'w') as handle:
+            LOG.info("Writing cblaster binary table")
+            path = the_run.OUTPUT_DIR / 'binary.txt'
+            with open(path, 'w') as handle:
                 cblaster_session.format(form = "binary", fp = handle, delimiter = "\t")
+            LOG.debug(f'cblaster binary table written at {str(path)}')
         
         if args.output_plot:
-            plot_session(cblaster_session, output = the_run.OUTPUT_DIR / 'plot.html')
+            LOG.info("Writing cblaster plot")
+            path = the_run.OUTPUT_DIR / 'plot.html'
+            plot_session(cblaster_session, output = path)
+            LOG.debug(f'cblaster plot written at {str(path)}')
         
         if args.output_clinker:
+            LOG.info("Writing clinker plot")
+            path = the_run.OUTPUT_DIR / "clinker.html"
             with open(the_run.TEMP_DIR / "session.json", "w") as handle:
                 cblaster_session.to_json(fp = handle)
-            plot_clusters(the_run.TEMP_DIR / "session.json", plot_outfile = the_run.OUTPUT_DIR / "clinker.html")
+            plot_clusters(the_run.TEMP_DIR / "session.json", plot_outfile = path)
+            LOG.debug(f'clinker plot written at {str(path)}')
         
     if args.output_foldseek:
+        LOG.info("Copying FoldSeek output")
         for file in the_run.TEMP_DIR.glob('foldseek_result*'):
             shutil.copy(file, the_run.OUTPUT_DIR / file.name)
+        LOG.debug(f'FoldSeek output copied to {the_run.OUTPUT_DIR}')
     
     if args.output_tables:
+        LOG.info("Writing output tables")
         the_run.generate_tables(the_run.OUTPUT_DIR)
+        LOG.debug(f'Output tables written to {the_run.OUTPUT_DIR}')
     
     # Clean up temporary directory
+    LOG.info("Cleaning up temporary files")
     the_run.TEMP_DIR_CONTEXT.cleanup()
+    LOG.debug("Temporary files have been removed")
+    
+    
+    LOG.info('DONE!')
 
 
 if __name__ == "__main__":

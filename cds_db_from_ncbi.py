@@ -2,12 +2,21 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import logging
 import warnings
 warnings.filterwarnings('ignore')
 from Bio import Entrez
 import polars as pl
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+
+LOG = logging.getLogger(__name__)
+logging.basicConfig(
+    level = logging.INFO,
+    format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
+    datefmt="%H:%M:%S"
+    )
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
@@ -77,23 +86,30 @@ def main():
         gzip = "uncompressed"
     
     # Parse all GFFs
+    LOG.info('Parsing all GFF files')
     with ThreadPoolExecutor(max_workers = cores) as executor:
         parsed_gffs_to_concat = executor.map(parse_one_gff, input_path.glob('*.gff'))
+        
+    LOG.info('Construct CDS coordinate DB')
     cds_db = pl.concat(parsed_gffs_to_concat)
     
     # Fetch all taxon names
+    LOG.info('Fetch taxon names from NCBI Entrez')
     all_taxon_ids = cds_db.select('taxon_id').unique().to_series().to_list()
     with Entrez.esummary(db = 'taxonomy', id = all_taxon_ids) as handle:
         records = list(Entrez.read(handle))
     all_taxon_names = [str(i['ScientificName']) for i in records]
     
     # Join with the CDS DB
+    LOG.info('Add taxon name columns')
     id_name_map = pl.DataFrame({'taxon_id': all_taxon_ids, 'taxon_name': all_taxon_names})
     cds_db = cds_db.join(id_name_map, on = 'taxon_id', how = 'left', maintain_order = "left")
     
     # Write results
+    LOG.info('Write DB to disk')
     cds_db.write_csv(output_path, separator = '\t', include_header = False, compression = gzip)
     
     
 if __name__ == "__main__":
     main()
+

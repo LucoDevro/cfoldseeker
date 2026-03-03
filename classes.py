@@ -4,6 +4,7 @@
 import operator
 import itertools as it
 import sys
+import logging
 import polars as pl
 import networkx as nx
 from abc import ABC, abstractmethod
@@ -12,6 +13,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from cblaster.classes import Session
+
+
+LOG = logging.getLogger(__name__)
 
 
 class Hit:
@@ -99,7 +103,7 @@ class Hit:
             return last_start - first_end 
         
     # Checks whether two hits are at exactly the same genomic coordinates
-    def same_spot(self, other_hit):
+    def same_location(self, other_hit):
         first = min([self, other_hit], key = operator.methodcaller('start'))
         last = max([self, other_hit], key = operator.methodcaller('start'))
         return last.start() >= first.start() and last.end() <= first.end() and first.scaff == last.scaff
@@ -125,24 +129,24 @@ class Cluster:
         self.strand = self.hits[0].strand
         common_strand = {h.strand for h in self.hits}
         if len(common_strand) == 0:
-            print("Warning! Different coding strands found in your cluster.")
+            LOG.warning(f'Different coding strands found among the gene hits in cluster {number}!')
         
         # Same for scaffold ID
         self.scaff: str = self.hits[0].scaff
         common_scaff = {h.scaff for h in self.hits}
         if len(common_scaff) == 0:
-            print("Warning! Different scaffolds found in your cluster.")
+            LOG.warning(f"Different scaffolds found among the gene hits in cluster {number}!")
         
         # Same for taxon ID
         self.taxon_id: str = self.hits[0].taxon_id
         common_taxon_id = {h.taxon_id for h in self.hits}
         if len(common_taxon_id) == 0:
-            print("Warning! Different taxon IDs found in your cluster.")
+            LOG.warning(f"Different taxon IDs found among the gene hits in cluster {number}.")
             
         self.taxon_name: str = self.hits[0].taxon_name
         common_taxon_name = {h.taxon_name for h in self.hits}
         if len(common_taxon_name) == 0:
-            print("Warning! Different taxon names found in your cluster.")
+            LOG.warning(f"ifferent taxon names found ammong the gene hits in cluster {number}.")
         
         return None
     
@@ -170,12 +174,16 @@ def _sanitise_hit_attr(hits: list, attr: str) -> list:
     In case of an absent attribute, the hit is discarded.
     """
     sanitised_hits = []
+    split_counter = 0
+    discard_counter = 0
+    untouched_counter = 0
     # Loop over all hits, but keep track of the index
     for h in hits:
         # Determine whether we should split a record
         nb_copies = len(getattr(h, attr))
         # If we need to split a record, make as much copies as there are crossrefs and adjust each crossref to one of these
         if nb_copies > 1:
+            split_counter += 1
             split_records = []
             copy_counter = 0
             while copy_counter < nb_copies:
@@ -187,22 +195,29 @@ def _sanitise_hit_attr(hits: list, attr: str) -> list:
             sanitised_hits.append(split_records)
         # If we don't need to split the record, just unlist it
         elif nb_copies == 1:
+            untouched_counter += 1
             setattr(h, attr, getattr(h, attr)[0])
             # Insert at the index of the old record
             sanitised_hits.append([h])
         # If it's empty, don't include it in the new hit set
         else:
+            discard_counter += 1
             continue
     
     # Flatten the full hit list again
     hits = list(it.chain(*sanitised_hits))
+    
+    LOG.debug(f"{split_counter} hit records have been exploded while sanitising.")
+    LOG.debug(f"{discard_counter} hit records have been discarded while sanitising.")
+    LOG.debug(f"{untouched_counter} hit records have been left untouched while sanitising.")
     
     return hits
 
 
 class Search(ABC):
     
-    def __init__(self, query, params = {}, hits = [], clusters = [], output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, params = {}, hits = [], clusters = [], 
+                output_folder = Path('.'), temp_folder = Path('.')):
         
         self.query: list = query # dictionary of query names as keys and structure filepaths as values
         self.params: dict = params # dictionary containing the search configuration
@@ -212,6 +227,7 @@ class Search(ABC):
         self.OUTPUT_DIR = output_folder
         self.TEMP_DIR_CONTEXT: TemporaryDirectory = TemporaryDirectory(dir = temp_folder, delete = False)
         self.TEMP_DIR = Path(self.TEMP_DIR_CONTEXT.name)
+        LOG.debug(f'Created temporary folder at {self.TEMP_DIR}.')
         
         return None
     
@@ -244,8 +260,16 @@ class Search(ABC):
         min_covered_queries = self.params['min_cov_qrs']
         require = self.params['require']
         
+        LOG.debug('Applying the following cluster identification criteria:')
+        LOG.debug(f'maximum intergenic gap >= {max_gap}')
+        LOG.debug(f'maximum cluster length >= {max_length}')
+        LOG.debug(f'minimum number of hits in a cluster >= {min_hits}')
+        LOG.debug(f'minimum number of queries covered by a cluster >= {min_covered_queries}')
+        LOG.debug(f'queries required to present in a cluster <= {require}')
+        
         ### Cluster identification
         ## First, make groups by scaffold
+        LOG.info('Grouping hits by scaffold')
         scaff_groups = {}
         for h in self.hits:
             if h.scaff in scaff_groups.keys():
@@ -256,11 +280,12 @@ class Search(ABC):
         ## Then, calculate the intergenic distance between all connections on the same scaffold
         ## and filter out the ones failing the intergenic threshold
         ## and filter out self-hits as these are not genuine collocalised genes
+        LOG.info("Calculating intergenic distances")
         close_groups = []
         for _, hits in scaff_groups.items():
             # Calculate the intergenetic distances and find the self-hits
             pairs_to_test = list(it.combinations(hits, 2))
-            self_hits = {pair: Hit.same_spot(*pair) for pair in pairs_to_test}
+            self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
             dists = {pair: Hit.intergenic_distance(*pair) for pair in pairs_to_test}
             
             # Apply the filtering
@@ -270,12 +295,14 @@ class Search(ABC):
             # Collect
             if len(dists) > 0:
                 close_groups.append(list(dists.keys()))
+                
         if len(close_groups) == 0:
-            print("No cluster could be identified!")
+            LOG.error("No hit groups passed the distance criteria!")
             sys.exit()
         
-        ## Then identify the clusters by chained hits on the same scaffold using a directed network graph
-        ## Account for multi-hits and -crossrefs by generating all possible hit chains when encountering hits on the same genomic spot
+        ## Then identify the clusters by finding chains of distance pairs on the same scaffold using a directed network graph
+        ## Account for multi-hits and -crossrefs by generating all possible hit chains when encountering pairs on the same genomic location
+        LOG.info("Identifying gene clusters from chains of distance pairs")
         clusters = []
         for cg in close_groups:
             # Order every hit pair so from up- to downstream
@@ -300,7 +327,7 @@ class Search(ABC):
                 # Generate all possible hit chains
                 all_paths_this_chain = [list(nx.all_simple_paths(subG, first, last)) for first in firsts for last in lasts]
                 all_paths_this_chain = list(it.chain(*all_paths_this_chain))
-                # Filter out paths containing shortcuts, i.e. keep only longest paths
+                # Keep only the longest paths (discard the paths with shortcuts skipping a gene)
                 max_path_length = max([len(p) for p in all_paths_this_chain])
                 all_paths_this_chain = [p for p in all_paths_this_chain if len(p) == max_path_length]
                 all_paths.append(all_paths_this_chain)
@@ -313,6 +340,7 @@ class Search(ABC):
         clusters = list(it.chain(*clusters))
         
         ### Apply intra-cluster filtering requirements
+        LOG.info("Filtering identified clusters")
         # Minimum number of hits in a cluster
         clusters_filt = [cl for cl in clusters if len(cl) >= min_hits]
         # Minimum number of covered queries and required queries
@@ -327,15 +355,20 @@ class Search(ABC):
         res_objects_filt = [cl for cl in res_objects if cl.length <= max_length]
         
         ## Rank by cluster score and renumber
+        LOG.info('Sorting and renumbering by cluster score')
         res_objects_filt.sort(key = operator.attrgetter('score'), reverse = True)
         for idx,cl in enumerate(res_objects_filt):
             cl.number = idx+1
         
         ### Save
         self.clusters = res_objects_filt
+        LOG.info(f"Identified {len(res_objects_filt)} gene clusters")
         
         ### Update the hits attribute after filtering at cluster level
+        LOG.debug('Discarding hits not present in the identified gene clusters')
         self.hits = [h for cl in self.clusters for h in cl.hits]
+        
+        LOG.info('FINISHED PART 3')
         
         return None
    
@@ -345,6 +378,7 @@ class Search(ABC):
         Saves the hit and cluster lists in separate overview tables.
         """
         # First the hits
+        LOG.debug('Generating hit table')
         all_hit_data = [h.as_dict() for h in self.hits]
         all_hit_data_df = pl.DataFrame(all_hit_data, schema = ['db_id', 'query', 'scaff', 'strand', 'coords', 'db', 'crossref_id',
                                                                'crossref_method', 'name', 'taxon_name', 'taxon_id', 'evalue', 
@@ -352,6 +386,7 @@ class Search(ABC):
         all_hit_data_df.write_csv(output_folder / 'hits.tsv', include_header = True, separator = "\t")
         
         # Then the clusters
+        LOG.debug('Writing gene cluster table')
         all_cluster_data = [cl.as_dict() for cl in self.clusters]
         all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'scaff', 'strand',
                                                                        'taxon_name', 'taxon_id', 'hits'])
@@ -370,7 +405,7 @@ class Search(ABC):
             """
             structure = MMCIF2Dict(file)
             res_ids = [int(i) for i in structure['_entity_poly_seq.num']]
-            return max(res_ids)*3
+            return max(res_ids)*3 # codon triplets
         
         def get_clusters_by_id(self, nbs):
             """
@@ -387,9 +422,11 @@ class Search(ABC):
         session_dict = {}
         
         ### Queries field
+        LOG.debug("Generating Queries field")
         session_dict['queries'] = list(self.query.keys())
         
         ### Query field
+        LOG.debug('Generating Query field')
         cblaster_query = {}
         cblaster_query['indices'] = []
         ## Query Subjects field
@@ -424,6 +461,7 @@ class Search(ABC):
         session_dict['query'] = cblaster_query
         
         ### Params field
+        LOG.debug("Generating Params field")
         cblaster_params = {}
         cblaster_params['mode'] = self.params['mode']
         cblaster_params['database'] = list(self.params['db'])
@@ -438,6 +476,7 @@ class Search(ABC):
         session_dict['params'] = cblaster_params
         
         ### Organisms field
+        LOG.debug("Generating Organisms field")
         cblaster_organisms = {}
         
         ## Group the session's cluster records in the same way as they will be structured in the session file,
@@ -456,7 +495,7 @@ class Search(ABC):
         ## Make the cblaster session fields inside out, i.e. populate organisms first with scaffolds (and other attributes),
         ## then populate the scaffolds with clusters and subjects, then populate the clusters with links to the subjects.
         for (txid, scaff), clusters in grouped_cl_dict.items():
-            # Create a new organism instance of there's no one for this taxon ID
+            # Create a new organism instance if there's no one for this taxon ID
             if txid in cblaster_organisms.keys():
                 this_organism = cblaster_organisms[txid]
             else:
@@ -474,8 +513,8 @@ class Search(ABC):
                                  'clusters': []}
                 this_organism['scaffolds'][scaff] = this_scaffold
                 
-            # Populate this scaffold with cluster for each cluster identified on this scaffold
-            # Keep track of the number of hits covered on this scaffold for proper references in output files
+            # Populate this scaffold with clusters for each cluster identified on this scaffold
+            # Keep track of the number of hits covered on this scaffold for proper references in the subject links
             nb_hits_covered = 0
             for cl in clusters:
                 cblaster_this_cluster = {}
@@ -510,7 +549,7 @@ class Search(ABC):
                     cblaster_this_subject['sequence'] = None
                     this_scaffold['subjects'].append(cblaster_this_subject)
         
-        ## Discard the taxon ID and scaffold ID indexing to get the cblaster session formatting
+        ## Discard the taxon ID and scaffold ID nested index to get the cblaster session format
         cblaster_organisms = list(cblaster_organisms.values())
         cblaster_organisms_new = []
         for organism in cblaster_organisms:
@@ -520,6 +559,7 @@ class Search(ABC):
         session_dict['organisms'] = cblaster_organisms_new
         
         ### Construct the cblaster Session
+        LOG.debug('Constructing the cblaster session')
         session = Session.from_dict(session_dict)
         
         return session
