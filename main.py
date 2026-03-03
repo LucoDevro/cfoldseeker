@@ -20,7 +20,7 @@ from local import LocalSearch
 LOG = logging.getLogger()
 
 
-def getArguments():
+def getArguments() -> argparse.Namespace:
     """
     This function gets the CLI arguments, without any parsing.
     """
@@ -92,7 +92,7 @@ def getArguments():
     return args
 
 
-def parseArguments(args):
+def parseArguments(args) -> dict:
     """
     This function parses the arguments and returns a parsed arguments dictionary that is used to call the workflows.
     """

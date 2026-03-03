@@ -47,10 +47,10 @@ class Hit:
         self.coords: list = coords #list of genomic coordinates of the encoding gene's exons
         self.strand: str = strand #DNA strand the encoding gene is part from
     
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.query} Hit {self.db_id}\t {self.scaff} {self.start()}-{self.end()} ({self.strand})"
     
-    def as_dict(self):
+    def as_dict(self) -> dict:
         return {'query': self.query,
                 'db_id': self.db_id,
                 'db': self.db,
@@ -69,25 +69,25 @@ class Hit:
                 'strand': self.strand}
     
     # Returns start coordinate of the first exon
-    def start(self):
+    def start(self) -> int | None:
         try:
             return min(it.chain(*self.coords))
         except ValueError:
             return None
     
     # Returns end coordinate of the last exon
-    def end(self):
+    def end(self) -> int | None:
         try:
             return max(it.chain(*self.coords))
         except ValueError:
             return None
     
     # Returns the sum of the exon lengths
-    def length(self):
+    def length(self) -> int:
         return sum([abs(c[1] - c[0] + 1) for c in self.coords])
     
     # Returns the intergenic distance between two genes. Negative if they overlap
-    def intergenic_distance(self, other_hit):
+    def intergenic_distance(self, other_hit: 'Hit') -> int:
         first = min([self, other_hit], key = operator.methodcaller('start'))
         first_start = first.start()
         first_end = first.end()
@@ -103,7 +103,7 @@ class Hit:
             return last_start - first_end 
         
     # Checks whether two hits are at exactly the same genomic coordinates
-    def same_location(self, other_hit):
+    def same_location(self, other_hit: 'Hit') -> bool:
         first = min([self, other_hit], key = operator.methodcaller('start'))
         last = max([self, other_hit], key = operator.methodcaller('start'))
         return last.start() >= first.start() and last.end() <= first.end() and first.scaff == last.scaff
@@ -126,7 +126,7 @@ class Cluster:
         # Cluster length is defined by the sum of hits' exons
         self.length: int = sum([h.length() for h in self.hits])
         # Take over cluster strand from the first hit. Throw a warning if strands do not match across the hits in the cluster
-        self.strand = self.hits[0].strand
+        self.strand: str = self.hits[0].strand
         common_strand = {h.strand for h in self.hits}
         if len(common_strand) == 0:
             LOG.warning(f'Different coding strands found among the gene hits in cluster {number}!')
@@ -150,10 +150,10 @@ class Cluster:
         
         return None
     
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Cluster {self.number}: {len(self.hits)} proteins from {self.scaff} ({self.start} - {self.end}), ({self.strand})\tScore: {self.score}"
     
-    def as_dict(self):
+    def as_dict(self) -> dict:
         return {'hits': ','.join([h.db_id for h in self.hits]),
                 'number': self.number,
                 'score': self.score,
@@ -219,20 +219,20 @@ class Search(ABC):
     def __init__(self, query, params = {}, hits = [], clusters = [], 
                 output_folder = Path('.'), temp_folder = Path('.')):
         
-        self.query: list = query # dictionary of query names as keys and structure filepaths as values
+        self.query: list = query # list of query filepaths
         self.params: dict = params # dictionary containing the search configuration
         self.hits: list = hits # list of Hit objects
         self.clusters: list = clusters # list of Cluster objects
         
-        self.OUTPUT_DIR = output_folder
+        self.OUTPUT_DIR: Path = output_folder
         self.TEMP_DIR_CONTEXT: TemporaryDirectory = TemporaryDirectory(dir = temp_folder, delete = False)
-        self.TEMP_DIR = Path(self.TEMP_DIR_CONTEXT.name)
+        self.TEMP_DIR: Path = Path(self.TEMP_DIR_CONTEXT.name)
         LOG.debug(f'Created temporary folder at {self.TEMP_DIR}.')
         
         return None
     
     
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Search of {','.join(list(self.query.keys()))} with {len(self.clusters)} clusters identified"
     
     @abstractmethod
@@ -248,17 +248,17 @@ class Search(ABC):
         pass
     
     
-    def identify_clusters(self):
+    def identify_clusters(self) -> None:
         """
         Identifies the gene clusters among the hits.
         """
         
         ### Load the requirements from params
-        max_gap = self.params['max_gap']
-        max_length = self.params['max_length']
-        min_hits = self.params['min_hits']
-        min_covered_queries = self.params['min_cov_qrs']
-        require = self.params['require']
+        max_gap: int = self.params['max_gap']
+        max_length: int = self.params['max_length']
+        min_hits: int = self.params['min_hits']
+        min_covered_queries: int = self.params['min_cov_qrs']
+        require: list = self.params['require']
         
         LOG.debug('Applying the following cluster identification criteria:')
         LOG.debug(f'maximum intergenic gap >= {max_gap}')
@@ -373,7 +373,7 @@ class Search(ABC):
         return None
    
     
-    def generate_tables(self, output_folder):
+    def generate_tables(self, output_folder: Path) -> None:
         """
         Saves the hit and cluster lists in separate overview tables.
         """
@@ -395,11 +395,11 @@ class Search(ABC):
         return None
     
     
-    def generate_cblaster_session(self):
+    def generate_cblaster_session(self) -> Session:
         """
         Generates a cblaster session object
         """
-        def get_sequence_length_from_cif(file):
+        def get_sequence_length_from_cif(file: Path) -> int:
             """
             Determines the CDS sequence length of the protein structure in the input CIF file.
             """
@@ -407,13 +407,13 @@ class Search(ABC):
             res_ids = [int(i) for i in structure['_entity_poly_seq.num']]
             return max(res_ids)*3 # codon triplets
         
-        def get_clusters_by_id(self, nbs):
+        def get_clusters_by_id(self, nbs: list(int)) -> list(Cluster):
             """
             Returns the cluster object that has the given cluster number.
             """
             return [cl for cl in self.clusters if cl.number in nbs]
         
-        def get_taxon_name_from_taxon_id(self, txid):
+        def get_taxon_name_from_taxon_id(self, txid: int) -> str:
             """
             Returns the taxon name associated with a given taxon ID.
             """

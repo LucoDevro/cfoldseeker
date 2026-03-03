@@ -28,16 +28,16 @@ class RemoteSearch(Search):
         super().__init__(query, params, hits, clusters, output_folder, temp_folder)
         
         LOG.debug(f'Scanning ID mapping table from {str(mapping_table_path)}')
-        self.mapping_table: dict = pl.scan_csv(mapping_table_path, has_header = False, separator = "\t",
-                                               new_columns = ['Uniprot', 'DB', 'ID'])
+        self.mapping_table: pl.LazyFrame = pl.scan_csv(mapping_table_path, has_header = False, separator = "\t",
+                                                       new_columns = ['Uniprot', 'DB', 'ID'])
                 
         return None
     
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Remote Search of {','.join(list(self.query.keys()))} in {self.params['db']} with {len(self.clusters)} clusters identified"
     
     
-    def run_foldseek(self):
+    def run_foldseek(self) -> None:
         """
         Submits queries to the FoldSeek webserver and collects the results.
         """
@@ -48,7 +48,7 @@ class RemoteSearch(Search):
         """
         Submits one structure file to the FoldSeek API and returns the submission ticket in dictionary form.
         """
-        def submit_foldseek_query(query_path, dbs, taxfilters):
+        def submit_foldseek_query(query_path: Path, dbs: list(str), taxfilters: list(int)) -> None:
             with open(query_path, "rb") as f:
                 files = {"q": f}
                 data = [("mode", "3diaa")]
@@ -71,7 +71,7 @@ class RemoteSearch(Search):
         """
         Checks the status of the job associated with the provided job ID. Returns the status flag.
         """
-        def check_query_status(job_id):
+        def check_query_status(job_id: str) -> str:
             url = f"{FOLDSEEK_SUBMISSION_URL}/{job_id}"
             LOG.info(f'Checking out status of job {job_id}')
             results = requests.get(url).json()
@@ -83,7 +83,7 @@ class RemoteSearch(Search):
         Waits for the FoldSeek job associated with the provided job ID to complete, and retrieves its result.
         Returns the parsed results in a dictionary.
         """
-        def retrieve_foldseek_results(job_id):
+        def retrieve_foldseek_results(job_id: str) -> dict:
             while True:
                 status = check_query_status(job_id)
                 if status == "COMPLETE":
@@ -122,7 +122,7 @@ class RemoteSearch(Search):
         return None
     
     
-    def parse_foldseek_results(self):
+    def parse_foldseek_results(self) -> None:
         """
         Parses the FoldSeek results and creates Hit objects for the passing hits
         """
@@ -206,7 +206,7 @@ class RemoteSearch(Search):
         return None
             
                 
-    def crossref_afdb(self):
+    def crossref_afdb(self) -> list(Hit):
         """
         Crossrefs all hits in the various supported AFDB flavours where possible and
         retrieves the genomic neighbourhood information (scaffold IDs and coordinates).
@@ -346,7 +346,7 @@ class RemoteSearch(Search):
             return position_info
                         
 
-        def pull_from_ena(entry):
+        def pull_from_ena(entry: str) -> None:
             """
             Pulls a GenPept record from the ENA Browser API.
             """
@@ -476,7 +476,7 @@ class RemoteSearch(Search):
         return all_afdb_hits
     
 
-    def run(self):
+    def run(self) -> None:
         """
         Complete remote search workflow run
         """

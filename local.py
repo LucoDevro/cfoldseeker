@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import re
-import sys
 import logging
 import threading
 import subprocess
 import shutil
 import polars as pl
 from pathlib import Path
+from typing import Callable
 
 from classes import Search, Hit
 
@@ -37,20 +37,20 @@ class LocalSearch(Search):
         
         super().__init__(query, params, hits, clusters, output_folder, temp_folder)
         
-        self.db_path = db_path
+        self.db_path: Path = db_path
         
         LOG.debug(f"Scanning CDS DB from {coord_db_path}")
-        self.coord_db = pl.scan_csv(coord_db_path, has_header = False, separator = "\t", 
-                                    new_columns = ['gene_tag', 'name', 'contig', 'coords',
-                                                   'strand', 'taxon_id', 'taxon_name'])
+        self.coord_db: pl.LazyFrame = pl.scan_csv(coord_db_path, has_header = False, separator = "\t", 
+                                                  new_columns = ['gene_tag', 'name', 'contig', 'coords',
+                                                                 'strand', 'taxon_id', 'taxon_name'])
         
         return None
     
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Local Search of {','.join(list(self.query.keys()))} with {len(self.clusters)} clusters identified"
     
     
-    def run_foldseek(self):
+    def run_foldseek(self) -> None:
         """
         Runs FoldSeek on the local DB.
         """
@@ -107,7 +107,7 @@ class LocalSearch(Search):
         return None        
     
     
-    def parse_foldseek_results(self):
+    def parse_foldseek_results(self) -> None:
         """
         Parses the FoldSeek result table.
         """
@@ -181,7 +181,7 @@ class LocalSearch(Search):
         return None
     
     
-    def run(self):
+    def run(self) -> None:
         """
         Complete local search workflow run
         """

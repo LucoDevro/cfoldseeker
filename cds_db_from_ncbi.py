@@ -18,7 +18,7 @@ logging.basicConfig(
     )
 
 
-def parse_arguments():
+def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog = 'cds_db_from_ncbi.py',
                 epilog = 
@@ -45,7 +45,7 @@ def parse_arguments():
     return args
 
 
-def parse_one_gff(path):
+def parse_one_gff(path: Path) -> pl.DataFrame:
     """
     Parse one NCBI GFF table into a Polars DataFrame
     """
