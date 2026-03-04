@@ -129,7 +129,8 @@ def parseArguments(args) -> dict:
     logging.basicConfig(
         level = log_levels[args.verbosity],
         format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
-        datefmt="%H:%M:%S"
+        datefmt="%H:%M:%S",
+        handlers = [logging.StreamHandler(sys.stdout)]
         )
     
     # Parse the arguments
