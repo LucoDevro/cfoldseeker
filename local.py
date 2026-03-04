@@ -8,7 +8,6 @@ import subprocess
 import shutil
 import polars as pl
 from pathlib import Path
-from typing import Callable
 
 from classes import Search, Hit
 

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import sys
 import logging
 import warnings
 warnings.filterwarnings('ignore')
@@ -38,9 +39,20 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-c', '--cores', dest = 'cores', type = int, default = 1, help = "Number of cores available to use (default: 1).")
     parser.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('local_db'), help = "Filepath to save CDS coordinate DB (default: local_db).")
     parser.add_argument('-gz', '--gzip', dest = 'gzip', default = False, action = 'store_true', help = "Gzip output (default: False).")
+    parser.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', help = "Force overwriting output (default: false).")
     parser.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
 
     args = parser.parse_args()
+    
+    assert args.input.exists() and args.input.is_dir() and any(args.input.glob('*.gff')), 'Input folder path does not exist or does not contain GFF files.'
+    if args.output.exists():
+        if args.force:
+            LOG.warning("Output already exists, but it will be overwritten.")
+        else:
+            LOG.error("Output already exists! Rerun with -f to overwrite it.")
+            sys.exit()
+    else:
+        args.output.parent.mkdir(parents = True, exist_ok = True)
     
     return args
 
@@ -71,6 +83,9 @@ def parse_one_gff(path: Path) -> pl.DataFrame:
                             ])
     cds_record = cds_record.drop_nulls(subset = 'gene_tag')
     
+    # Aggregate multiple CDSes (i.e. exons) in one record
+    cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
+    
     return cds_record.collect()
 
 
@@ -90,18 +105,18 @@ def main():
     with ThreadPoolExecutor(max_workers = cores) as executor:
         parsed_gffs_to_concat = executor.map(parse_one_gff, input_path.glob('*.gff'))
         
-    LOG.info('Construct CDS coordinate DB')
+    LOG.info('Construct CDS coordinates DB')
     cds_db = pl.concat(parsed_gffs_to_concat)
     
     # Fetch all taxon names
-    LOG.info('Fetch taxon names from NCBI Entrez')
+    LOG.info('Fetch taxon names using NCBI Entrez')
     all_taxon_ids = cds_db.select('taxon_id').unique().to_series().to_list()
     with Entrez.esummary(db = 'taxonomy', id = all_taxon_ids) as handle:
         records = list(Entrez.read(handle))
     all_taxon_names = [str(i['ScientificName']) for i in records]
     
     # Join with the CDS DB
-    LOG.info('Add taxon name columns')
+    LOG.info('Add taxon name column')
     id_name_map = pl.DataFrame({'taxon_id': all_taxon_ids, 'taxon_name': all_taxon_names})
     cds_db = cds_db.join(id_name_map, on = 'taxon_id', how = 'left', maintain_order = "left")
     
