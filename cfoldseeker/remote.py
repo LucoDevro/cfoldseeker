@@ -2,20 +2,21 @@
 # -*- coding: utf-8 -*-
 
 import re
-import time
 import sys
-import requests
 import json
-import io
 import logging
 import polars as pl
 import itertools as it
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from kegg_pull.pull import MultiProcessMultiplePull
-from Bio import SeqIO
 
 from cfoldseeker.classes import Hit, Search, _sanitise_hit_attr
+from cfoldseeker.communication import (submit_foldseek_query, retrieve_foldseek_results, 
+                                       pull_dict_from_unisave, pull_from_ena)
+from cfoldseeker.remote_parsers import (extract_genomic_information_ena, 
+                                        extract_genomic_information_kegg, 
+                                        extract_scaffold_mapping_kegg)
 
 LOG = logging.getLogger(__name__)
 
@@ -42,62 +43,6 @@ class RemoteSearch(Search):
         Submits queries to the FoldSeek webserver and collects the results.
         """
 
-        FOLDSEEK_SUBMISSION_URL = "https://search.foldseek.com/api/ticket"
-        FOLDSEEK_RESULTS_URL = "https://search.foldseek.com/api/result"
-        
-        """
-        Submits one structure file to the FoldSeek API and returns the submission ticket in dictionary form.
-        """
-        def submit_foldseek_query(query_path: Path, dbs: list, taxfilters: list) -> None:
-            with open(query_path, "rb") as f:
-                files = {"q": f}
-                data = [("mode", "3diaa")]
-                for db in dbs:
-                    data.append(("database[]", db))
-                for taxfilt in taxfilters:
-                    data.append(('taxfilter', taxfilt))
-                LOG.debug(f"Posting request on FoldSeek webserver {FOLDSEEK_SUBMISSION_URL}")
-                LOG.debug(f"using the following parameters: {data}")
-                response = requests.post(FOLDSEEK_SUBMISSION_URL, files=files, data=data)
-                if response.status_code == 200:
-                    LOG.info(f'Query {query_path} successfully submitted!')
-                    return response.json()
-                else:
-                    LOG.exception(f"Error submitting query {query_path}!")
-                    
-            return None
-        
-        """
-        Checks the status of the job associated with the provided job ID. Returns the status flag.
-        """
-        def check_query_status(job_id: str) -> str:
-            url = f"{FOLDSEEK_SUBMISSION_URL}/{job_id}"
-            LOG.info(f'Checking out status of job {job_id}')
-            results = requests.get(url).json()
-            status = results['status']
-            
-            return status
-        
-        """
-        Waits for the FoldSeek job associated with the provided job ID to complete, and retrieves its result.
-        Returns the parsed results in a dictionary.
-        """
-        def retrieve_foldseek_results(job_id: str) -> dict:
-            while True:
-                status = check_query_status(job_id)
-                if status == "COMPLETE":
-                    LOG.info(f"Job {job_id} has completed! Downloading results...")
-                    entry = 0
-                    url = f"{FOLDSEEK_RESULTS_URL}/{job_id}/{entry}"
-                    results = requests.get(url).json()
-                    break
-                else:
-                    LOG.info(f"Job {job_id} has not completed yet. Waiting another 10 seconds...")
-                    time.sleep(10)
-                    
-            return results
-            
-        
         # First submit all query proteins to FoldSeek
         LOG.info('Posting queries at FoldSeek webserver')
         query_foldseek = lambda x: submit_foldseek_query(x, self.params['db'], self.params['taxfilters'])
@@ -109,7 +54,6 @@ class RemoteSearch(Search):
         with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             all_results = dict(zip(self.query.keys(), executor.map(retrieve_foldseek_results, all_job_ids)))
         
-        LOG.info('FINISHED PART 1')
         LOG.info('All queries have been processed and downloaded!')
         self.hits = all_results
         
@@ -199,7 +143,6 @@ class RemoteSearch(Search):
         filtered_hits = list(it.chain(*filtered_hits))
         self.hits = filtered_hits
         
-        LOG.info('FINISHED PART 2')
         LOG.info(f'Found {len(filtered_hits)} gene hits.')
         
         return None
@@ -227,147 +170,12 @@ class RemoteSearch(Search):
             return res
         
 
-        def extract_genomic_information_kegg(gene_entry: str) -> dict:
-            """
-            Extracts the genomic information from a pulled KEGG Gene record.
-            """
-            # Genomic positions are at the POSITION line
-            position_line = [line for line in gene_entry.split('\n') if 'POSITION' in line]
-            
-            position_info = {}
-            if len(position_line) == 0:
-                return position_info
-            else:
-                position_line = position_line[0]
-                # If there is a scaffold mentioned, get it
-                if ':' in position_line:
-                    internal_scaffold_id, coords = position_line.split(':')
-                    internal_scaffold_id = internal_scaffold_id[12:]
-                # If not, leave empty. The downstream processing will handle this
-                else:
-                    internal_scaffold_id, coords = '', position_line
-                # Extract the coordinates of all exons, ignoring indefinite boundaries
-                coords = coords.translate(str.maketrans('', '', '<>'))
-                coord_groups = re.findall(r'\d+\.\.\d+', coords)
-                # If no coordinate information, return the response dictionary empty
-                if len(coord_groups) == 0:
-                    return position_info
-                # Else, parse it
-                coord_groups = [i.split('..') for i in coord_groups]
-                coord_groups = [[int(j) for j in i] for i in coord_groups]
-                if 'complement' in coords:
-                    strand = "-"
-                else:
-                    strand = "+"
-                
-                # Gather the results
-                position_info['scaffold'] = internal_scaffold_id
-                position_info['coords'] = coord_groups
-                position_info['strand'] = strand
-                
-                return position_info
-            
-
-        def extract_scaffold_mapping_kegg(genome_entry: str) -> dict:
-            """
-            Maps all KEGG scaffold IDs for a Genome entry to the associated GenBank/RefSeq IDs.
-            """
-            lines = genome_entry.split('\n')
-            ## First the CHROMOSOME field
-            # Find the start
-            start_chromosome = [idx for idx,line in enumerate(lines) if 'CHROMOSOME' in line]
-            if len(start_chromosome) == 0:
-                mapping_scaffolds = {}
-            else:
-                # Expand it
-                index = start_chromosome[0]
-                chromosome_field = [lines[index][12:]]
-                while index < len(lines) and lines[index+1].startswith(' '):
-                    index += 1
-                    chromosome_field.append(lines[index][12:])
-                # Parse it
-                internal_scaffold_ids = [re.split(r'[;\s]', l)[0] for l in chromosome_field]
-                internal_scaffold_ids = ['' if l == 'Circular' else l for l in internal_scaffold_ids]
-                scaffolds = [l.split(':')[1][:-1] for l in chromosome_field]
-                mapping_scaffolds = dict(zip(internal_scaffold_ids, scaffolds))
-            
-            ## Then the PLASMIDS field
-            # Find the start
-            start_plasmid = [idx for idx,line in enumerate(lines) if 'PLASMID' in line]
-            if len(start_plasmid) == 0:
-                mapping_plasmids = {}
-            else:
-                # Expand it
-                index = start_plasmid[0]
-                plasmid_field = [lines[index][12:]]
-                while index < len(lines) and lines[index+1].startswith(' '):
-                    index += 1
-                    plasmid_field.append(lines[index][12:])
-                # Parse it
-                internal_plasmid_ids = [re.split(r'[;\s]', l)[0] for l in plasmid_field]
-                plasmids = [l.split(':')[1][:-1] for l in plasmid_field]
-                mapping_plasmids = dict(zip(internal_plasmid_ids, plasmids))
-            
-            ## Wrap it in a dictionary
-            mapping = mapping_scaffolds | mapping_plasmids
-            
-            return mapping
-        
-        
-        def extract_genomic_information_ena(record: str) -> dict:
-            """
-            Extracts the genomic information from a pulled ENA GenPept record.
-            """
-            position_info = {}
-            # catch for empty or bad results
-            if record == None:
-                return None
-            embl = io.StringIO(record)
-            seq_record = list(SeqIO.parse(embl, format = 'embl'))[0]
-            cds = [f for f in seq_record.features if f.type == 'CDS'][0]
-            # Genome coordinates
-            parts = cds.location.parts
-            coord_groups = [[int(p.start)+1, int(p.end)] for p in parts] # start coordinate is one off in BioPython parsing
-            # Scaffold
-            scaffold = list({p.ref for p in parts})[0]
-            # Strand
-            strand = cds.location.strand
-            if strand == 1:
-                strand = '+'
-            elif strand == -1:
-                strand = '-'
-            
-            # collect
-            position_info['coords'] = coord_groups
-            position_info['strand'] = strand
-            position_info['scaffold'] = scaffold
-            
-            return position_info
-                        
-
-        def pull_from_ena(entry: str) -> None:
-            """
-            Pulls a GenPept record from the ENA Browser API.
-            """
-            ENA_BROWSER_URL = "https://www.ebi.ac.uk/ena/browser/api/embl"
-            
-            url = f"{ENA_BROWSER_URL}/{entry}"
-            LOG.debug(f'Going to pull GenPept record from {url}')
-            response = requests.get(url)
-            if response.status_code == 200:
-                return response.text
-            else:
-                LOG.warning(f'Error pulling GenPept record {entry}')
-            
-            return None
-            
-               
         ### Identify the AFDB hits. These will be crossreffed by this function
         all_afdb_hits = [h for h in self.hits if 'afdb' in h.db]
             
         ### Get the crossreffing IDs            
-        ## First, try to get KEGG IDs
-        LOG.info('Searching crossrefs in KEGG')
+        ## Method 1: try to get KEGG IDs
+        LOG.info('Crossref method 1: Searching crossrefs in KEGG')
         all_uniprot_ids = list({h.db_id for h in all_afdb_hits})
         hits_failed_kegg = []
         # Extract a mapping table for KEGG IDs from the Uniprot crossref mapping table
@@ -382,23 +190,47 @@ class RemoteSearch(Search):
                 continue
         LOG.info(f'{len(hits_failed_kegg)} hits have no crossref in KEGG.')
         
-        ## Then, try to get GenPept IDs for the hits that did not get a KEGG ID.
-        LOG.info('Searching crossrefs in GenPept')
+        ## Method 2: try to get GenPept IDs for the hits that did not get a KEGG ID.
+        LOG.info('Crossref method 2: Searching crossrefs in GenPept')
         uniprot_ids_failed_kegg = list({h.db_id for h in hits_failed_kegg})
         hits_failed_genpept = []
+        # Extract a mapping table for GenPept IDs from the Uniprot crossref mapping table
         all_uniprot_genpept = prepare_mapping_dict(uniprot_ids_failed_kegg, 'EMBL-CDS')
         # Fill the GenPept IDs
-        for h in all_afdb_hits:
+        for h in hits_failed_kegg:
             if h.db_id in all_uniprot_genpept.keys():
                 genpept_id = all_uniprot_genpept[h.db_id]
                 genpept_id = [i for i in genpept_id if i != '-'] # Filter out empty crossrefs (often mRNA records)
+                if len(genpept_id) == 0:
+                    hits_failed_genpept.append(h)
+                    continue
                 h.crossref_id = genpept_id
                 h.crossref_method = "GenPept"
             else:
                 hits_failed_genpept.append(h)
                 continue
         LOG.info(f'..., of which {len(hits_failed_genpept)} hits have no crossref in GenPept.')
-        print([h.db_id for h in hits_failed_genpept])
+        
+        ## Method 3: try to get WGS GenPept IDs for the hits that failed the previous two methods
+        LOG.info('Crossref method 3: Searching crossrefs in WGS-GenPept')
+        uniprot_ids_failed_genpept = list({h.db_id for h in hits_failed_genpept})
+        hits_failed_wgs_genpept = []
+        # Pull all UniSave records
+        all_unisaves = pull_dict_from_unisave(uniprot_ids_failed_genpept, max_workers = self.params['max_workers'])
+        # Fill the WGS-GenPept IDs
+        for h in hits_failed_genpept:
+            unisave_record = all_unisaves[h.db_id]
+            wgs_genpept_lines = [l for l in unisave_record.split('\n') if 'DR   EMBL' in l and 'NOT_ANNOTATED_CDS' not in l]
+            if len(wgs_genpept_lines) == 0:
+                hits_failed_wgs_genpept.append(h)
+                continue
+            wgs_genpept_id = wgs_genpept_lines[0].split(';')[2].strip()
+            if len(re.findall(r'[A-Z|0-9]+\.[1-9]', wgs_genpept_id)) == 0:
+                hits_failed_wgs_genpept.append(h)
+                continue
+            h.crossref_id = [wgs_genpept_id]
+            h.crossref_method = "WGS-GenPept"
+        LOG.info(f'..., of which {len(hits_failed_wgs_genpept)} hits have no crossref in WGS-GenPept.')
             
         ## Split records with multiple crossrefs and discard the ones without crossref
         LOG.debug("Sanitising the hit list")
@@ -445,7 +277,7 @@ class RemoteSearch(Search):
         ## Get the scaffold and genome positions for the GenPept crossreffing method
         ## Pull all GenPept records from ENA in EMBL format
         LOG.info("Pulling GenPept crossrefs from ENA")
-        all_genpept_gene_ids = list({h.crossref_id for h in all_afdb_hits if h.crossref_method == "GenPept"})
+        all_genpept_gene_ids = list({h.crossref_id for h in all_afdb_hits if "GenPept" in h.crossref_method})
         LOG.debug(f'Going to pull {len(all_genpept_gene_ids)} ENA GenPept entries')
         with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
             ena_records = dict(zip(all_genpept_gene_ids, executor.map(pull_from_ena, all_genpept_gene_ids)))
@@ -470,7 +302,6 @@ class RemoteSearch(Search):
         
         ### Update the hit set
         all_afdb_hits = processed_hits
-        LOG.info("FINISHED PART 2B")
         LOG.info(f'{len(processed_hits)} hits have been processed.')
         
         return all_afdb_hits
@@ -483,16 +314,20 @@ class RemoteSearch(Search):
         
         LOG.info("STARTING PART 1: Executing FoldSeek search")
         self.run_foldseek()
+        LOG.info('FINISHED PART 1')
         
         LOG.info("STARTING PART 2: Parsing FoldSeek results")
         self.parse_foldseek_results()
+        LOG.info('FINISHED PART 2')
         
         LOG.info('STARTING PART 2B: Fetching CDS coordinates via crossreffing')
         afdb_hits = self.crossref_afdb()
         self.hits = afdb_hits
+        LOG.info("FINISHED PART 2B")
         
         LOG.info('STARTING PART 3: Identifying gene clusters')
         self.identify_clusters()
+        LOG.info('FINISHED PART 3')
         
         return None
         

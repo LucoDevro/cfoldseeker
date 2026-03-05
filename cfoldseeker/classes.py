@@ -10,7 +10,6 @@ import networkx as nx
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from cblaster.classes import Session
 
@@ -366,8 +365,6 @@ class Search(ABC):
         ### Update the hits attribute after filtering at cluster level
         LOG.debug('Discarding hits not present in the identified gene clusters')
         self.hits = [h for cl in self.clusters for h in cl.hits]
-        
-        LOG.info('FINISHED PART 3')
         
         return None
    

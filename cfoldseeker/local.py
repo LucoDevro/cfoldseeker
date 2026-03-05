@@ -101,7 +101,6 @@ class LocalSearch(Search):
             sys.exit()
         else:
             LOG.info('FoldSeek finished successfully.')
-            LOG.info("FINISHED PART 1")
     
         return None        
     
@@ -174,7 +173,6 @@ class LocalSearch(Search):
         
         self.hits = all_hits
         
-        LOG.info('FINISHED PART 2')
         LOG.info(f'{len(all_hits)} hits have been processed.')
         
         return None
@@ -187,12 +185,15 @@ class LocalSearch(Search):
         
         LOG.info('STARTING PART 1: Executing FoldSeek search')
         self.run_foldseek()
+        LOG.info("FINISHED PART 1")
         
         LOG.info("STARTING PART 2: Parsing FoldSeek results")
         self.parse_foldseek_results()
+        LOG.info('FINISHED PART 2')
         
         LOG.info("STARTING PART 3: Identifying gene clusters")
         self.identify_clusters()
+        LOG.info('FINISHED PART 3')
         
         return None
         
