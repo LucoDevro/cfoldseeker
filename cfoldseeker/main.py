@@ -263,7 +263,7 @@ def main():
             path = the_run.OUTPUT_DIR / "clinker.html"
             with open(the_run.TEMP_DIR / "session.json", "w") as handle:
                 cblaster_session.to_json(fp = handle)
-            plot_clusters(the_run.TEMP_DIR / "session.json", plot_outfile = path)
+            plot_clusters(the_run.TEMP_DIR / "session.json", plot_outfile = path, max_clusters = 1e6)
             LOG.debug(f'clinker plot written at {str(path)}')
         
     if args.output_foldseek:
