@@ -61,15 +61,15 @@ def getArguments() -> argparse.Namespace:
                          help = "Save FoldSeek output. In remote mode, this is the raw json from the FoldSeek webserver. In local mode, this is a BLAST-like tabular text file. (default: false).")
 
     args_search = parser.add_argument_group('General search options')
-    args_search.add_argument('--max-eval', dest = "max_eval", type = float, default = 1e-3, help = "Maximum e-value to include a FoldSeek hit.")
-    args_search.add_argument('--min-score', dest = "min_score", type = float, default = 0, help = "Minimum FoldSeek bitscore to include a hit.")
-    args_search.add_argument('--min-seqid', dest = "min_seqid", type = float, default = 0, help = "Minimum sequence identity to include a hit (in percentages).")
-    args_search.add_argument('--min-qcov', dest = "min_qcov", type = float, default = 0, help = "Minimum query coverage to include a hit (in percentages).")
-    args_search.add_argument('--min-tcov', dest = "min_tcov", type = float, default = 0, help = "Minimum target coverage to include a hit (in percentages).")
-    args_search.add_argument('--max-gap', dest = "max_gap", type = int, default = 5000, help = "Maximum intergenic gap within a cluster (in bp).")
-    args_search.add_argument('--max-length', dest = "max_length", type = int, default = 100000, help = "Maximum genomic length of a cluster (in bp).")
-    args_search.add_argument('--min-hits', dest = "min_hits", type = int, default = 0, help = "Minimum number of members in a cluster.")
-    args_search.add_argument('--min-cov-qrs', dest = "min_cov_qrs", type = int, default = 0, help = "Minimum different queries covered by a cluster.")
+    args_search.add_argument('--max-eval', dest = "max_eval", type = float, default = 1e-9, help = "Maximum e-value to include a FoldSeek hit (default: 1e-9).")
+    args_search.add_argument('--min-score', dest = "min_score", type = float, default = 250, help = "Minimum FoldSeek bitscore to include a hit (default: 250).")
+    args_search.add_argument('--min-seqid', dest = "min_seqid", type = float, default = 0, help = "Minimum sequence identity to include a hit (in percentages) (default: 0).")
+    args_search.add_argument('--min-qcov', dest = "min_qcov", type = float, default = 50, help = "Minimum query coverage to include a hit (in percentages) (default: 50).")
+    args_search.add_argument('--min-tcov', dest = "min_tcov", type = float, default = 50, help = "Minimum target coverage to include a hit (in percentages) (default: 50).")
+    args_search.add_argument('--max-gap', dest = "max_gap", type = int, default = 5000, help = "Maximum intergenic gap within a cluster (in bp) (default: 5000).")
+    args_search.add_argument('--max-length', dest = "max_length", type = int, default = 1e5, help = "Maximum genomic length of a cluster (in bp) (default: 1e5).")
+    args_search.add_argument('--min-hits', dest = "min_hits", type = int, default = 2, help = "Minimum number of members in a cluster (default: 2).")
+    args_search.add_argument('--min-cov-qrs', dest = "min_cov_qrs", type = int, default = 2, help = "Minimum different queries covered by a cluster (default: 2).")
     args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filenames without extensions).")
     
     args_remote = parser.add_argument_group("Remote-specific search options")
@@ -98,17 +98,17 @@ def parseArguments(args) -> dict:
     assert args.mode in ['local', 'remote'], 'Invalid search mode. Possible choices: "local" and "remote".'
     assert set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}, "Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'."
     assert args.query_folder.exists() and args.query_folder.is_dir() and any(args.query_folder.iterdir()), 'Query folder path does not exist or is not a non-empty directory.'
-    assert args.cores > 0, 'Number of cores must be positive.'
+    assert args.cores > 0, 'Number of cores must be strictly positive.'
     assert args.max_workers > 0, 'Number of workers must be positive.'
-    assert args.max_eval < 1 and args.max_eval > 0, 'Maximum e-value should be a number between 0 and 1.'
+    assert args.max_eval <= 1 and args.max_eval > 0, 'Maximum e-value should be a number between 0 and 1.'
     assert args.min_seqid >= 0 and args.min_seqid <= 100, "Minimum sequence identity should be a percentage between 0 and 100."
     assert args.min_score >= 0, "Minimum FoldSeek bitscore should be a positive number."
     assert args.min_qcov >= 0 and args.min_qcov <= 100, "Minimum query coverage should be a percentage between 0 and 100."
     assert args.min_tcov >= 0 and args.min_tcov <= 100, "Minimum target coverage should be a percentage between 0 and 100."
     assert args.max_gap >= 0, "Maximum intergenic gap should be a positive number."
-    assert args.max_length >= 0, "Maximum cluster length should be a positive number."
-    assert args.min_hits >= 0, "Minimum number of hits in a cluster should be a positive number."
-    assert args.min_cov_qrs >= 0, "Minimum number of covered queries in a cluster should be a positive number."
+    assert args.max_length >= 1, "Maximum cluster length should be strictly positive."
+    assert args.min_hits >= 1, "Minimum number of hits in a cluster should be strictly positive."
+    assert args.min_cov_qrs >= 1, "Minimum number of covered queries in a cluster should be strictly positive."
     if args.mode == 'remote':
         db = args.db
         assert args.mapping_table_path.exists() and args.mapping_table_path.is_file(), "UniProt mapping table path does not exist or is not a file."
@@ -263,7 +263,7 @@ def main():
             path = the_run.OUTPUT_DIR / "clinker.html"
             with open(the_run.TEMP_DIR / "session.json", "w") as handle:
                 cblaster_session.to_json(fp = handle)
-            plot_clusters(the_run.TEMP_DIR / "session.json", plot_outfile = path, max_clusters = 1e6)
+            plot_clusters(the_run.TEMP_DIR / "session.json", plot_outfile = path, max_clusters = 10**6)
             LOG.debug(f'clinker plot written at {str(path)}')
         
     if args.output_foldseek:

@@ -73,7 +73,8 @@ class LocalSearch(Search):
                '-v', foldseek_verbosity,
                "--min-seq-id", str(self.params['min_seqid']),
                '-e', str(self.params['max_eval']),
-               '--threads', str(self.params['cores'])
+               '--threads', str(self.params['cores']),
+               '--exhaustive-search', '1'
                ]
         
         # Launching search process
