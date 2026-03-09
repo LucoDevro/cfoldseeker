@@ -165,7 +165,7 @@ class RemoteSearch(Search):
                                             ).filter(pl.col('DB') == db).drop('DB')
             res = res.group_by('Uniprot').all()
             res = res.collect() # Materialise the LazyFrame into a DataFrame
-            res = dict(zip(res['Uniprot'], res['ID'].to_list()))
+            res = dict(zip(res['Uniprot'], res['ID']))
             
             return res
         
@@ -300,9 +300,10 @@ class RemoteSearch(Search):
             
             processed_hits.append(h)
         
-        ### Update the hit set
+        ### Final cleanup and update of the hit set
+        processed_hits = _sanitise_hit_attr(processed_hits, 'scaffold') # Discards hits that failed crossreffing
         all_afdb_hits = processed_hits
-        LOG.info(f'{len(processed_hits)} hits have been processed.')
+        LOG.info(f'{len(all_afdb_hits)} hits have been processed.')
         
         return all_afdb_hits
     

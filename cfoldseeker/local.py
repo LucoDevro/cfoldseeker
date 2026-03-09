@@ -119,6 +119,7 @@ class LocalSearch(Search):
         ## Parse results table
         LOG.debug(f"Scanning FoldSeek result table at {str(self.TEMP_DIR / 'foldseek_result.txt')}")
         results = pl.scan_csv(self.TEMP_DIR / 'foldseek_result.txt', has_header = True, separator = "\t")
+        results = results.unique() # Discard duplicate hits
         
         ## Convert tcov and qcov to percentages
         results = results.with_columns([pl.col("qcov") * 100, pl.col('tcov') * 100])

@@ -34,7 +34,7 @@ def getArguments() -> argparse.Namespace:
                 formatter_class = argparse.RawDescriptionHelpFormatter,
                 description = 
                 """
-                cfoldseeker: find clusters of colocalised genes via structural similarity using FoldSeek
+                cfoldseeker: find clusters of colocalised genes using structural similarity with FoldSeek
                 """,
                 add_help = False
                 )
@@ -201,7 +201,7 @@ def main():
     
     # Then we initiate the right workflow
     if parsed_args['params']['mode'] == 'remote':
-        LOG.info("Setting up cfoldseeker in remote mode")
+        LOG.info("Launching cfoldseeker in remote mode")
         the_run = RemoteSearch(query = parsed_args['paths']['query'],
                                mapping_table_path = parsed_args['paths']['uniprot_mapping'],
                                params = parsed_args['params'],
@@ -209,7 +209,7 @@ def main():
                                temp_folder = parsed_args['paths']['temp_folder']
                                )
     elif parsed_args['params']['mode'] == 'local':
-        LOG.info("Setting up cfoldseeker in local mode")
+        LOG.info("Launching cfoldseeker in local mode")
         the_run = LocalSearch(query = parsed_args['paths']['query'],
                               db_path = parsed_args['paths']['local_db_path'],
                               coord_db_path = parsed_args['paths']['cds_mapping'],

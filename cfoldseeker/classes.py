@@ -360,7 +360,7 @@ class Search(ABC):
         
         ### Save
         self.clusters = res_objects_filt
-        LOG.info(f"Identified {len(res_objects_filt)} gene clusters")
+        LOG.info(f"Identified {len(res_objects_filt)} gene clusters passing the criteria")
         
         ### Update the hits attribute after filtering at cluster level
         LOG.debug('Discarding hits not present in the identified gene clusters')
@@ -384,8 +384,8 @@ class Search(ABC):
         # Then the clusters
         LOG.debug('Writing gene cluster table')
         all_cluster_data = [cl.as_dict() for cl in self.clusters]
-        all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'scaff', 'strand',
-                                                                       'taxon_name', 'taxon_id', 'hits'])
+        all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'score', 'scaff',
+                                                                       'strand', 'taxon_name', 'taxon_id', 'hits'])
         all_cluster_data_df.write_csv(output_folder / 'clusters.tsv', include_header = True, separator = "\t")
         
         return None

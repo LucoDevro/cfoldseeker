@@ -4,6 +4,7 @@
 import logging
 import requests
 import time
+import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -31,6 +32,7 @@ def submit_foldseek_query(query_path: Path, dbs: list, taxfilters: list) -> None
             return response.json()
         else:
             LOG.exception(f"Error submitting query {query_path}!")
+            sys.exit()
             
     return None
 
