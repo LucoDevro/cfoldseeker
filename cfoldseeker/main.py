@@ -97,7 +97,7 @@ def parseArguments(args) -> dict:
     
     assert args.mode in ['local', 'remote'], 'Invalid search mode. Possible choices: "local" and "remote".'
     assert set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}, "Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'."
-    assert args.query_folder.exists() and args.query_folder.is_dir() and any(args.query_folder.iterdir()), 'Query folder path does not exist or is not a non-empty directory.'
+    assert args.query_folder.exists() and args.query_folder.is_dir() and any(args.query_folder.glob('*cif')), 'Query folder path does not exist or does not contain cif files.'
     assert args.cores > 0, 'Number of cores must be strictly positive.'
     assert args.max_workers > 0, 'Number of workers must be positive.'
     assert args.max_eval <= 1 and args.max_eval > 0, 'Maximum e-value should be a number between 0 and 1.'
@@ -150,7 +150,7 @@ def parseArguments(args) -> dict:
               'taxfilters': args.taxfilters
               }
     
-    paths = {'query' : {q.stem: q.resolve() for q in args.query_folder.iterdir()},
+    paths = {'query' : {q.stem: q.resolve() for q in args.query_folder.glob('*.cif')},
              'uniprot_mapping' : args.mapping_table_path.resolve(),
              'cds_mapping' : args.cds_mapping_table_path.resolve(),
              'local_db_path' : args.local_db_path.resolve(),

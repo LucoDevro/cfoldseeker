@@ -300,8 +300,7 @@ class RemoteSearch(Search):
             
             processed_hits.append(h)
         
-        ### Final cleanup and update of the hit set
-        processed_hits = _sanitise_hit_attr(processed_hits, 'scaffold') # Discards hits that failed crossreffing
+        ### Final update of the hit set
         all_afdb_hits = processed_hits
         LOG.info(f'{len(all_afdb_hits)} hits have been processed.')
         
