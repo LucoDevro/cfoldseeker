@@ -496,7 +496,7 @@ class Search(ABC):
                 this_organism = cblaster_organisms[txid]
             else:
                 this_organism = {'name': get_taxon_name_from_taxon_id(self, txid),
-                                 'strain': f"(txid: {txid})",
+                                 'strain': "",
                                  'scaffolds': {}}
                 cblaster_organisms[txid] = this_organism
             

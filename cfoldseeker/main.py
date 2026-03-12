@@ -73,7 +73,7 @@ def getArguments() -> argparse.Namespace:
     args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filenames without extensions).")
     
     args_remote = parser.add_argument_group("Remote-specific search options")
-    args_remote.add_argument('-db', '--database', dest = 'db', type = str, default = ['afdb50'], nargs = '+', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
+    args_remote.add_argument('-rdb', '--remote-db', dest = 'db', type = str, default = ['afdb50'], nargs = '+', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
                              help = "Remote target database (default: afdb50) (choices: afdb-proteome, afdb-swissprot, afdb50)")
     args_remote.add_argument('-tf', '--taxon-filter', dest = 'taxfilters', type = str, default = '', nargs = '*',
                              help = "Taxon ID(s) to filter the FoldSeek results table.")
@@ -82,8 +82,8 @@ def getArguments() -> argparse.Namespace:
     args_remote.add_argument('-w', '--max-workers', dest = "max_workers", type = int, default = 1, help = "Maximum number of workers to query the remote servers (FoldSeek, KEGG, ENA) (default: 1)")
     
     args_local = parser.add_argument_group('Local-specific search options')
-    args_local.add_argument('-ldb', '--local-database', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
-    args_local.add_argument('-cm', '--cds-mapping', dest = 'cds_mapping_table_path', type = Path, default = Path('local_cds_db.gz'), help = "Path of the CDS coordinates DB (default: local_cds_db.gz).")
+    args_local.add_argument('-ldb', '--local-db', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
+    args_local.add_argument('-cdb', '--cds-coords-db', dest = 'cds_db_path', type = Path, default = Path('local_cds_db.gz'), help = "Path of the CDS coordinates DB (default: local_cds_db.gz).")
     
     args = parser.parse_args()
     
@@ -115,7 +115,7 @@ def parseArguments(args) -> dict:
     elif args.mode == 'local':
         db = ["local"]
         assert args.local_db_path.exists(), "Local FoldSeek DB does not seem to exist."
-        assert args.cds_mapping_table_path.exists() and args.cds_mapping_table_path.is_file(), "CDS mapping table path does not exist or is not a file."
+        assert args.cds_db_path.exists() and args.cds_db_path.is_file(), "CDS mapping table path does not exist or is not a file."
     
     # Configure the logger
     log_levels = {0: logging.CRITICAL,
@@ -152,7 +152,7 @@ def parseArguments(args) -> dict:
     
     paths = {'query' : {q.stem: q.resolve() for q in args.query_folder.glob('*.cif')},
              'uniprot_mapping' : args.mapping_table_path.resolve(),
-             'cds_mapping' : args.cds_mapping_table_path.resolve(),
+             'cds_db_path' : args.cds_db_path.resolve(),
              'local_db_path' : args.local_db_path.resolve(),
              'output_folder' : args.output.resolve(),
              'temp_folder': args.temp.resolve()
@@ -212,7 +212,7 @@ def main():
         LOG.info("Launching cfoldseeker in local mode")
         the_run = LocalSearch(query = parsed_args['paths']['query'],
                               db_path = parsed_args['paths']['local_db_path'],
-                              coord_db_path = parsed_args['paths']['cds_mapping'],
+                              coord_db_path = parsed_args['paths']['cds_db_path'],
                               params = parsed_args['params'],
                               output_folder = parsed_args['paths']['output_folder'],
                               temp_folder = parsed_args['paths']['temp_folder']
