@@ -23,12 +23,13 @@ setup(name = "cfoldseeker",
           "Topic :: Scientific/Engineering :: Bio-Informatics",
       ],
       entry_points = {"console_scripts": ['cfoldseeker = cfoldseeker.main:main',
-                                          'cfoldseeker-build = cfoldseeker.build_db:main']},
+                                          'cfoldseeker-build = cfoldseeker.build_cds_db:main']},
       install_requires=[
           "biopython",
           "cblaster >=1.3.20",
           "polars >=1.0.0",
           "networkx",
           "requests",
+          "fastexcel"
       ],
       )
