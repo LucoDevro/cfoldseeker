@@ -257,6 +257,7 @@ class Search(ABC):
         min_hits: int = self.params['min_hits']
         min_covered_queries: int = self.params['min_cov_qrs']
         require: list = self.params['require']
+        all_layouts: bool = self.params['all_layouts']
         
         LOG.debug('Applying the following cluster identification criteria:')
         LOG.debug(f'maximum intergenic gap >= {max_gap}')
@@ -300,7 +301,7 @@ class Search(ABC):
         
         ## Then identify the clusters by finding chains of distance pairs on the same scaffold using a directed network graph
         ## Account for multi-hits and -crossrefs by generating all possible hit chains when encountering pairs on the same genomic location
-        LOG.info("Identifying gene clusters from chains of distance pairs")
+        LOG.info("Identifying gene clusters from chains of distance pairs, applying cluster criteria")
         clusters = []
         for cg in close_groups:
             # Order every hit pair so from up- to downstream
@@ -312,7 +313,7 @@ class Search(ABC):
             chains = list(nx.weakly_connected_components(G))
             
             # Then, identify all possible chains by generating chains for all multi-hit or -crossref combinations
-            all_paths = []
+            all_clusters = []
             for chain in chains:
                 subG = G.subgraph(chain)
                 
@@ -328,39 +329,43 @@ class Search(ABC):
                 # Keep only the longest paths (discard the paths with shortcuts skipping a gene)
                 max_path_length = max([len(p) for p in all_paths_this_chain])
                 all_paths_this_chain = [p for p in all_paths_this_chain if len(p) == max_path_length]
-                all_paths.append(all_paths_this_chain)
+                
+                # Create Cluster objects from the paths
+                all_clusters_this_chain = [Cluster(p) for p in all_paths_this_chain]
+                
+                # Apply intra-cluster filtering criteria
+                # Minimum number of hits
+                all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain if len(cl.hits) >= min_hits]
+                # Minimum number of covered queries
+                covered_queries = {cl: {h.query for h in cl.hits} for cl in all_clusters_this_chain_filt}
+                all_clusters_this_chain_filt = [cl for cl,cov_qrs in covered_queries.items()
+                                                if len(cov_qrs) >= min_covered_queries and set(require) <= cov_qrs]
+                # Maximum cluster length
+                all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain_filt if cl.length <= max_length]
+                
+                # Keep only the best-scoring cluster layout if not all cluster layouts are requested
+                if not(all_layouts) and len(all_clusters_this_chain_filt) > 0:
+                    all_clusters_this_chain_filt = [max(all_clusters_this_chain_filt, key = operator.attrgetter('score'))]
+                
+                # Collect
+                all_clusters.append(all_clusters_this_chain_filt)
             
-            # Save the chains for this neighbour group
-            all_paths = list(it.chain(*all_paths))
-            clusters.append(all_paths)
+            # Save the clusters for this genomic neighbourhood
+            all_clusters = list(it.chain(*all_clusters))
+            clusters.append(all_clusters)
         
         # Flatten out all results
         clusters = list(it.chain(*clusters))
         
-        ### Apply intra-cluster filtering requirements
-        LOG.info("Filtering identified clusters")
-        # Minimum number of hits in a cluster
-        clusters_filt = [cl for cl in clusters if len(cl) >= min_hits]
-        # Minimum number of covered queries and required queries
-        covered_queries = [{h.query for h in cl} for cl in clusters_filt]
-        clusters_filt = [cl for cl,qrs in zip(clusters_filt, covered_queries)
-                         if len(qrs) >= min_covered_queries and set(require) <= qrs]
-        
-        ### Create the Cluster objects from the filtered hit clusters
-        res_objects = [Cluster(cl, number = idx) for idx,cl in enumerate(clusters_filt)]
-        
-        ### Filter for maximum cluster length
-        res_objects_filt = [cl for cl in res_objects if cl.length <= max_length]
-        
-        ## Rank by cluster score and renumber
+        ## Rank overall by cluster score and add number
         LOG.info('Sorting and renumbering by cluster score')
-        res_objects_filt.sort(key = operator.attrgetter('score'), reverse = True)
-        for idx,cl in enumerate(res_objects_filt):
+        clusters.sort(key = operator.attrgetter('score'), reverse = True)
+        for idx,cl in enumerate(clusters):
             cl.number = idx+1
         
         ### Save
-        self.clusters = res_objects_filt
-        LOG.info(f"Identified {len(res_objects_filt)} gene clusters passing the criteria")
+        self.clusters = clusters
+        LOG.info(f"Identified {len(clusters)} gene clusters passing the criteria")
         
         ### Update the hits attribute after filtering at cluster level
         LOG.debug('Discarding hits not present in the identified gene clusters')

@@ -71,6 +71,7 @@ def getArguments() -> argparse.Namespace:
     args_search.add_argument('--min-hits', dest = "min_hits", type = int, default = 2, help = "Minimum number of members in a cluster (default: 2).")
     args_search.add_argument('--min-cov-qrs', dest = "min_cov_qrs", type = int, default = 2, help = "Minimum different queries covered by a cluster (default: 2).")
     args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filenames without extensions).")
+    args_search.add_argument('--all-layouts', dest = 'all_layouts', default = False, action = 'store_true', help = "Include cluster layouts matching all criteria but with a less-than-best score (default: False).")
     
     args_remote = parser.add_argument_group("Remote-specific search options")
     args_remote.add_argument('-rdb', '--remote-db', dest = 'db', type = str, default = ['afdb50'], nargs = '+', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
@@ -147,7 +148,8 @@ def parseArguments(args) -> dict:
               'min_cov_qrs': args.min_cov_qrs,
               'require': args.require,
               'db': db,
-              'taxfilters': args.taxfilters
+              'taxfilters': args.taxfilters,
+              'all_layouts': args.all_layouts
               }
     
     paths = {'query' : {q.stem: q.resolve() for q in args.query_folder.glob('*.cif')},
