@@ -485,25 +485,29 @@ class Search(ABC):
         
         # Prepare a polars dataframe of taxon IDs (organisms), scaffold IDs and cluster numbers (clusters)
         taxon_ids = [cl.taxon_id for cl in self.clusters]
+        taxon_names = [cl.taxon_name for cl in self.clusters]
         scaffs = [cl.scaff for cl in self.clusters]
         cl_nbs = [cl.number for cl in self.clusters]
-        cl_df = pl.DataFrame({'taxon_ids': taxon_ids, 'scaffolds': scaffs, 'cluster_number': cl_nbs})
+        cl_df = pl.DataFrame({'taxon_ids': taxon_ids, 
+                              'taxon_names': taxon_names,
+                              'scaffolds': scaffs, 
+                              'cluster_number': cl_nbs})
         
         # Group by taxon ID and scaffold ID, and cast into a dictionary
-        grouped_cl_df = cl_df.group_by(['taxon_ids', 'scaffolds']).all()
-        grouped_cl_dict = {(row[0], row[1]): get_clusters_by_id(self, row[2]) for row in grouped_cl_df.iter_rows()}
+        grouped_cl_df = cl_df.group_by(['taxon_ids', 'taxon_names', 'scaffolds']).all()
+        grouped_cl_dict = {(row[0], row[1], row[2]): get_clusters_by_id(self, row[3]) for row in grouped_cl_df.iter_rows()}
         
         ## Make the cblaster session fields inside out, i.e. populate organisms first with scaffolds (and other attributes),
         ## then populate the scaffolds with clusters and subjects, then populate the clusters with links to the subjects.
-        for (txid, scaff), clusters in grouped_cl_dict.items():
+        for (txid, txname, scaff), clusters in grouped_cl_dict.items():
             # Create a new organism instance if there's no one for this taxon ID
-            if txid in cblaster_organisms.keys():
-                this_organism = cblaster_organisms[txid]
+            if (txid, txname) in cblaster_organisms.keys():
+                this_organism = cblaster_organisms[(txid, txname)]
             else:
-                this_organism = {'name': get_taxon_name_from_taxon_id(self, txid),
+                this_organism = {'name': txname,
                                  'strain': "",
                                  'scaffolds': {}}
-                cblaster_organisms[txid] = this_organism
+                cblaster_organisms[(txid, txname)] = this_organism
             
             # Create a new scaffold instance of there is no one for this scaffold ID in this taxon
             if scaff in this_organism['scaffolds'].keys():
