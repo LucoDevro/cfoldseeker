@@ -110,6 +110,7 @@ def parseArguments(args) -> dict:
     assert args.max_length >= 1, "Maximum cluster length should be strictly positive."
     assert args.min_hits >= 1, "Minimum number of hits in a cluster should be strictly positive."
     assert args.min_cov_qrs >= 1, "Minimum number of covered queries in a cluster should be strictly positive."
+    assert set(args.require) <= {f.stem for f in args.query_folder.glob('*cif')}, "A required query cannot be found in your query folder. Please check the filenames."
     if args.mode == 'remote':
         db = args.db
         assert args.mapping_table_path.exists() and args.mapping_table_path.is_file(), "UniProt mapping table path does not exist or is not a file."

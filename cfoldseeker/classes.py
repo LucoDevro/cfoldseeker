@@ -301,7 +301,7 @@ class Search(ABC):
         
         ## Then identify the clusters by finding chains of distance pairs on the same scaffold using a directed network graph
         ## Account for multi-hits and -crossrefs by generating all possible hit chains when encountering pairs on the same genomic location
-        LOG.info("Identifying gene clusters from chains of distance pairs, applying cluster criteria")
+        LOG.info("Identifying gene clusters from chains of distance pairs passing cluster criteria")
         clusters = []
         for cg in close_groups:
             # Order every hit pair so from up- to downstream

@@ -315,7 +315,7 @@ def main():
     # Write results
     LOG.info('Writing DB to disk')
     cds_db = cds_db.select(['gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'taxon_name'])
-    cds_db.write_csv(output_path, separator = '\t', include_header = True, compression = gzip)
+    cds_db.write_csv(output_path, separator = '\t', include_header = False, compression = gzip)
     
     
 if __name__ == "__main__":

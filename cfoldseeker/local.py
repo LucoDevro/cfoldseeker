@@ -40,7 +40,9 @@ class LocalSearch(Search):
         self.db_path: Path = db_path
         
         LOG.debug(f"Scanning CDS DB from {coord_db_path}")
-        self.coord_db: pl.LazyFrame = pl.scan_csv(coord_db_path, has_header = True, separator = "\t")
+        self.coord_db: pl.LazyFrame = pl.scan_csv(coord_db_path, has_header = False, separator = "\t",
+                                                  new_columns = ['gene_tag', 'name', 'contig', 'strand', 
+                                                                 'coords', 'taxon_id', 'taxon_name'])
         
         return None
     
