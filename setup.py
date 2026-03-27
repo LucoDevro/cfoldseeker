@@ -23,7 +23,7 @@ setup(name = "cfoldseeker",
           "Topic :: Scientific/Engineering :: Bio-Informatics",
       ],
       entry_points = {"console_scripts": ['cfoldseeker = cfoldseeker.main:main',
-                                          'cfoldseeker-build = cfoldseeker.build_cds_db:main']},
+                                          'cfoldseeker-cds = cfoldseeker.build_cds_db:main']},
       install_requires=[
           "biopython",
           "cblaster >=1.3.20",
