@@ -9,7 +9,7 @@ warnings.filterwarnings('ignore')
 from Bio import Entrez
 import polars as pl
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from tqdm.contrib.concurrent import thread_map
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(
@@ -20,7 +20,7 @@ logging.basicConfig(
     )
 
 
-def parse_arguments() -> argparse.Namespace:
+def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog = 'build_cds_db.py',
                 epilog = 
@@ -44,6 +44,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-tn', '--use-taxon-names', dest = 'use_taxa', default = False, action = 'store_true', help = "Use taxon names as labels for all files instead of filenames (default: False).")
     parser.add_argument('-c', '--cores', dest = 'cores', type = int, default = 1, help = "Number of cores available to use (default: 1).")
     parser.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', help = "Force overwriting output (default: false).")
+    parser.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", help = "Don't show progress bar (default: False).")
     parser.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
 
     args = parser.parse_args()
@@ -70,7 +71,7 @@ def parse_arguments() -> argparse.Namespace:
     return args
 
 
-def parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl.DataFrame:
+def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl.DataFrame:
     """
     Parse one NCBI GFF file into a Polars DataFrame
     """
@@ -109,7 +110,7 @@ def parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl
     return cds_record.collect()
 
 
-def parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
+def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
     """
     Parse one Bakta GFF file into a Polars DataFrame
     """
@@ -143,7 +144,7 @@ def parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
     return cds_record.collect()
 
 
-def parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
+def _parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
     """
     Parse one TSV file into a Polars DataFrame
     """
@@ -161,7 +162,7 @@ def parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
     return cds_record.collect()
 
 
-def parse_one_excel(numbered_filepath: tuple) -> pl.DataFrame:
+def _parse_one_excel(numbered_filepath: tuple) -> pl.DataFrame:
     """
     Parse one Excel file into a Polars DataFrame
     """
@@ -179,29 +180,38 @@ def parse_one_excel(numbered_filepath: tuple) -> pl.DataFrame:
     return cds_record.collect()
 
 
-def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1) -> pl.DataFrame:
+def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = True) -> pl.DataFrame:
     """
     Parses all input files and returns a draft CDS coordinates DB.
     """
     # Parse all GFFs
-    with ThreadPoolExecutor(max_workers = n_workers) as executor:
-        match parsing_mode:
-            case 'ncbi-gff':
-                LOG.info('Parsing all input files as NCBI GFFs')
-                parsed_gffs_to_concat = executor.map(parse_one_ncbi_gff, enumerate(input_path.glob('*.gff')))
-            case 'ncbi-package':
-                LOG.info('Parsing all input files as an NCBI GFF package')
-                parsed_gffs_to_concat = executor.map(lambda x: parse_one_ncbi_gff(x, in_package = True), 
-                                                     enumerate(input_path.glob('ncbi_dataset/data/*/genomic.gff')))
-            case 'bakta-gff':
-                LOG.info('Parsing all input files as Bakta GFFs')
-                parsed_gffs_to_concat = executor.map(parse_one_bakta_gff, enumerate(input_path.glob('*.gff')))
-            case 'tsv':
-                LOG.info('Parsing all input files as TSVs')
-                parsed_gffs_to_concat = executor.map(parse_one_tsv, enumerate(input_path.glob('*.tsv')))
-            case 'excel':
-                LOG.info('Parsing all input files as Excel files')
-                parsed_gffs_to_concat = executor.map(parse_one_excel, enumerate(input_path.glob('*.xlsx')))
+    match parsing_mode:
+        case 'ncbi-gff':
+            LOG.info('Parsing all input files as NCBI GFFs')
+            parsed_gffs_to_concat = thread_map(_parse_one_ncbi_gff, list(enumerate(input_path.glob('*.gff'))),
+                                               leave = False,
+                                               disable = no_progress)
+        case 'ncbi-package':
+            LOG.info('Parsing all input files as an NCBI GFF package')
+            parsed_gffs_to_concat = thread_map(lambda x: _parse_one_ncbi_gff(x, in_package = True), 
+                                               list(enumerate(input_path.glob('ncbi_dataset/data/*/genomic.gff'))),
+                                               leave = False,
+                                               disable = no_progress)
+        case 'bakta-gff':
+            LOG.info('Parsing all input files as Bakta GFFs')
+            parsed_gffs_to_concat = thread_map(_parse_one_bakta_gff, list(enumerate(input_path.glob('*.gff'))),
+                                               leave = False,
+                                               disable = no_progress)
+        case 'tsv':
+            LOG.info('Parsing all input files as TSVs')
+            parsed_gffs_to_concat = thread_map(_parse_one_tsv, list(enumerate(input_path.glob('*.tsv'))),
+                                               leave = False,
+                                               disable = no_progress)
+        case 'excel':
+            LOG.info('Parsing all input files as Excel files')
+            parsed_gffs_to_concat = thread_map(_parse_one_excel, list(enumerate(input_path.glob('*.xlsx'))),
+                                               leave = False,
+                                               disable = no_progress)
                 
     # Concatenate all parsed GFF tables
     LOG.info('Constructing CDS coordinates DB')
@@ -292,19 +302,20 @@ def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str) ->
 
 def main():
     # Process arguments
-    args = parse_arguments()
+    args = _parse_arguments()
     cores = args.cores
     input_path = args.input
     output_path = args.output
     parsing_mode = args.mode
     use_taxa = args.use_taxa
+    no_progress = args.no_progress
     if args.gzip:
         gzip = "gzip"
     else:
         gzip = "uncompressed"
         
     # Parse the input files
-    cds_db = parse_inputs(input_path, parsing_mode, cores)
+    cds_db = parse_inputs(input_path, parsing_mode, n_workers = cores, no_progress = no_progress)
     
     # Check for duplicate contig labels
     cds_db = check_duplicate_contigs(cds_db, parsing_mode)

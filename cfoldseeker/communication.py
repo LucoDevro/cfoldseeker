@@ -6,7 +6,7 @@ import requests
 import time
 import sys
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from tqdm.contrib.concurrent import thread_map
 
 LOG = logging.getLogger(__name__)
 
@@ -28,10 +28,10 @@ def submit_foldseek_query(query_path: Path, dbs: list, taxfilters: list) -> None
         LOG.debug(f"using the following parameters: {data}")
         response = requests.post(FOLDSEEK_SUBMISSION_URL, files=files, data=data)
         if response.status_code == 200:
-            LOG.info(f'Query {query_path} successfully submitted!')
+            LOG.debug(f'Query {query_path} successfully submitted!')
             return response.json()
         else:
-            LOG.exception(f"Error submitting query {query_path}!")
+            LOG.critical(f"Error submitting query {query_path}!")
             sys.exit()
             
     return None
@@ -44,7 +44,7 @@ def check_query_status(job_id: str) -> str:
     FOLDSEEK_SUBMISSION_URL = "https://search.foldseek.com/api/ticket"
     
     url = f"{FOLDSEEK_SUBMISSION_URL}/{job_id}"
-    LOG.info(f'Checking out status of job {job_id}')
+    LOG.debug(f'Checking out status of job {job_id}')
     results = requests.get(url).json()
     status = results['status']
     
@@ -61,13 +61,13 @@ def retrieve_foldseek_results(job_id: str) -> dict:
     while True:
         status = check_query_status(job_id)
         if status == "COMPLETE":
-            LOG.info(f"Job {job_id} has completed! Downloading results...")
+            LOG.debug(f"Job {job_id} has completed! Downloading results...")
             entry = 0
             url = f"{FOLDSEEK_RESULTS_URL}/{job_id}/{entry}"
             results = requests.get(url).json()
             break
         else:
-            LOG.info(f"Job {job_id} has not completed yet. Waiting another 10 seconds...")
+            LOG.debug(f"Job {job_id} has not completed yet. Waiting another 10 seconds...")
             time.sleep(10)
             
     return results
@@ -115,13 +115,16 @@ def pull_from_unisave(entry: str, max_retries: int = 3) -> None | str:
             return None
 
 
-def pull_dict_from_unisave(entries: list, max_workers: int = 1) -> dict:
+def pull_dict_from_unisave(entries: list, max_workers: int = 1, no_progress: bool = False) -> dict:
     """
     Pulls a list of UniSave entries and returns it in a dictionary.
     """
     LOG.info(f'Going to pull {len(entries)} UniSave records')
-    with ThreadPoolExecutor(max_workers = max_workers) as executor:
-        unisave_entries = executor.map(pull_from_unisave, entries)
+    
+    unisave_entries = thread_map(pull_from_unisave, entries, 
+                                 max_workers = max_workers,
+                                 leave = False,
+                                 disable = no_progress)
     unisave_entries = [e for e in unisave_entries if e != None]
     return dict(zip(entries, unisave_entries))
 

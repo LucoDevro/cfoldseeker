@@ -5,11 +5,14 @@ import re
 import sys
 import json
 import logging
+import warnings
 import polars as pl
 import itertools as it
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from tqdm.contrib.concurrent import thread_map
+from tqdm.contrib.logging import logging_redirect_tqdm
 from kegg_pull.pull import MultiProcessMultiplePull
+from Bio import Entrez
 
 from cfoldseeker.classes import Hit, Search, _sanitise_hit_attr
 from cfoldseeker.communication import (submit_foldseek_query, retrieve_foldseek_results, 
@@ -46,18 +49,29 @@ class RemoteSearch(Search):
         # First submit all query proteins to FoldSeek
         LOG.info('Posting queries at FoldSeek webserver')
         query_foldseek = lambda x: submit_foldseek_query(x, self.params['db'], self.params['taxfilters'])
-        with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
-            tickets = dict(zip(self.query.keys(), executor.map(query_foldseek, self.query.values())))
+        query_paths = list(self.query.values())
+        query_labels = list(self.query.keys())
+        with logging_redirect_tqdm(loggers = [LOG]):
+            runs = thread_map(query_foldseek, query_paths, 
+                              max_workers = self.params['max_workers'],
+                              leave = False,
+                              disable = self.params['no_progress'])
+            tickets = dict(zip(query_labels, runs))
                 
         # Then wait for the results and retrieve them automatically when completed
+        LOG.info('Checking status and retrieving results when ready')
         all_job_ids = [ticket['id'] for ticket in tickets.values()]
-        with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
-            all_results = dict(zip(self.query.keys(), executor.map(retrieve_foldseek_results, all_job_ids)))
+        with logging_redirect_tqdm(loggers = [LOG]):
+            runs_results = thread_map(retrieve_foldseek_results, all_job_ids,
+                                      max_workers = self.params['max_workers'],
+                                      leave = False,
+                                      disable = self.params['no_progress'])
+            all_results = dict(zip(self.query.keys(), runs_results))
         
         LOG.info('All queries have been processed and downloaded!')
         self.hits = all_results
         
-        LOG.info('Saving results in temporary files')
+        LOG.info('Saving results in temporary folder')
         for query,result in all_results.items():
             with open((self.TEMP_DIR / f"foldseek_result_{query}").with_suffix('.json'), "w") as handle:
                 json.dump(result, handle)
@@ -216,7 +230,9 @@ class RemoteSearch(Search):
         uniprot_ids_failed_genpept = list({h.db_id for h in hits_failed_genpept})
         hits_failed_wgs_genpept = []
         # Pull all UniSave records
-        all_unisaves = pull_dict_from_unisave(uniprot_ids_failed_genpept, max_workers = self.params['max_workers'])
+        all_unisaves = pull_dict_from_unisave(uniprot_ids_failed_genpept,
+                                              max_workers = self.params['max_workers'],
+                                              no_progress = self.params['no_progress'])
         # Fill the WGS-GenPept IDs
         for h in hits_failed_genpept:
             unisave_record = all_unisaves[h.db_id]
@@ -246,11 +262,12 @@ class RemoteSearch(Search):
         
         # KEGG Gene IDs
         all_kegg_gene_ids = list({h.crossref_id for h in all_afdb_hits if h.crossref_method == 'KEGG'})
-        LOG.debug(f'Going to pull {len(all_kegg_gene_ids)} KEGG Gene entries')
+        LOG.info(f'Going to pull {len(all_kegg_gene_ids)} KEGG Gene entries')
         _, gene_records = pull.pull_dict(all_kegg_gene_ids)
+            
         # KEGG Genome IDs
         all_kegg_genome_ids = list({'genome:' + i.split(':')[0] for i in all_kegg_gene_ids})
-        LOG.debug(f'Going to pull {len(all_kegg_genome_ids)} KEGG Genome entries')
+        LOG.info(f'Going to pull {len(all_kegg_genome_ids)} KEGG Genome entries')
         _, genome_records = pull.pull_dict(all_kegg_genome_ids)
         genome_records = {k.split(':')[-1]: v for k,v in genome_records.items()}
         
@@ -278,9 +295,13 @@ class RemoteSearch(Search):
         ## Pull all GenPept records from ENA in EMBL format
         LOG.info("Pulling GenPept crossrefs from ENA")
         all_genpept_gene_ids = list({h.crossref_id for h in all_afdb_hits if "GenPept" in h.crossref_method})
-        LOG.debug(f'Going to pull {len(all_genpept_gene_ids)} ENA GenPept entries')
-        with ThreadPoolExecutor(max_workers = self.params['max_workers']) as executor:
-            ena_records = dict(zip(all_genpept_gene_ids, executor.map(pull_from_ena, all_genpept_gene_ids)))
+        
+        LOG.info(f'Going to pull {len(all_genpept_gene_ids)} ENA GenPept entries')
+        ena_records_pulled = thread_map(pull_from_ena, all_genpept_gene_ids,
+                                        max_workers = self.params['max_workers'],
+                                        leave = False,
+                                        disable = self.params['no_progress'])
+        ena_records = dict(zip(all_genpept_gene_ids, ena_records_pulled))
             
         ## Extract scaffold and coordinate information from the pulled ENA records
         LOG.debug("Parsing downloaded GenPept entries")
@@ -299,6 +320,28 @@ class RemoteSearch(Search):
                 continue
             
             processed_hits.append(h)
+        
+        ### Get the latest version digit of all accession codes
+        LOG.info('Adding latest version digits to accession codes')
+        all_old_scaffold_ids = [h.scaff for h in processed_hits]
+        with warnings.catch_warnings(action = "ignore"):
+            with Entrez.efetch(db = 'nucleotide',
+                               id = all_old_scaffold_ids,
+                               rettype = 'acc',
+                               retmode = 'text') as handle:
+                all_new_scaffold_ids = [l.rstrip() for l in handle.readlines()]
+        
+        ## Make mapping between old scaffold IDs and new ones
+        version_mappings = {}
+        for id_without in all_old_scaffold_ids:
+            mapped_id = next((id_with for id_with in all_new_scaffold_ids if id_with.startswith(id_without)), None)
+            if mapped_id:
+                version_mappings[id_without] = mapped_id
+        
+        ## Replace the scaffold IDs
+        for h in processed_hits:
+            if h.scaff in version_mappings.keys():
+                h.scaff = version_mappings[h.scaff]
         
         ### Final update of the hit set
         all_afdb_hits = processed_hits
