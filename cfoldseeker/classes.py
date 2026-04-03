@@ -414,12 +414,6 @@ class Search(ABC):
             """
             return [cl for cl in self.clusters if cl.number in nbs]
         
-        def get_taxon_name_from_taxon_id(self, txid: int) -> str:
-            """
-            Returns the taxon name associated with a given taxon ID.
-            """
-            return [cl.taxon_name for cl in self.clusters if cl.taxon_id == txid][0]
-        
         session_dict = {}
         
         ### Queries field

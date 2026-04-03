@@ -120,7 +120,7 @@ class RemoteSearch(Search):
                     score = int(hit_entry['score']) # FoldSeek hit score
                     seqid = float(hit_entry['seqId']) # Sequence identity with the query protein
                     qcov = (int(hit_entry['qEndPos']) - int(hit_entry['qStartPos'])) / int(hit_entry['qLen']) * 100 # Query coverage
-                    tcov = (int(hit_entry['dbEndPos']) - int(hit_entry['dbStartPos']) / int(hit_entry['dbLen'])) * 100 # Target coverage
+                    tcov = (int(hit_entry['dbEndPos']) - int(hit_entry['dbStartPos'])) / int(hit_entry['dbLen']) * 100 # Target coverage
                     
                     # Create Hit object and collect it if it passes all thresholds
                     if all((evalue <= max_eval, 
