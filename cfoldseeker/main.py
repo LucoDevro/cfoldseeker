@@ -16,12 +16,19 @@ from cfoldseeker.local import LocalSearch
 
 __version__ = version("cfoldseeker")
 
-LOG = logging.getLogger()
+
+LOG = logging.getLogger(__name__)
 
 
-def getArguments() -> argparse.Namespace:
+def get_arguments() -> argparse.Namespace:
     """
-    This function gets the CLI arguments, without any parsing.
+    This function collects the arguments given through the command line.
+    
+    Args:
+        None
+    
+    Returns:
+        A Namespace object holding the parsed arguments
     """
     
     parser = argparse.ArgumentParser(
@@ -92,35 +99,69 @@ def getArguments() -> argparse.Namespace:
     return args
 
 
-def parseArguments(args) -> dict:
+def parse_arguments(args) -> dict:
     """
-    This function parses the arguments and returns a parsed arguments dictionary that is used to call the workflows.
+    This function parses the arguments given through the command line.
+    
+    Args:
+        None
+    
+    Returns:
+        A dictionary holding the parsed and validated argument values.
+        
+    Note:
+        Also configures the logger.
     """
+    ## Validate arguments
+    try:
+        if args.mode not in ['local', 'remote']:
+            raise argparse.ArgumentError('Invalid search mode. Possible choices: "local" and "remote".')
+        if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
+            raise argparse.ArgumentError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
+        if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
+            raise argparse.ArgumentError('Query folder path does not exist or does not contain cif files.')
+        if not(args.cores > 0):
+            raise argparse.ArgumentError('Number of cores must be strictly positive.')
+        if not(args.max_workers > 0): 
+            raise argparse.ArgumentError('Number of workers must be positive.')
+        if not(args.max_eval <= 1 and args.max_eval > 0): 
+            raise argparse.ArgumentError('Maximum e-value should be a number between 0 and 1.')
+        if not(args.min_seqid >= 0 and args.min_seqid <= 100):
+            raise argparse.ArgumentError("Minimum sequence identity should be a percentage between 0 and 100.")
+        if not(args.min_score >= 0):
+            raise argparse.ArgumentError("Minimum FoldSeek bitscore should be a positive number.")
+        if not(args.min_qcov >= 0 and args.min_qcov <= 100):
+            raise argparse.ArgumentError("Minimum query coverage should be a percentage between 0 and 100.")
+        if not(args.min_tcov >= 0 and args.min_tcov <= 100):
+            raise argparse.ArgumentError("Minimum target coverage should be a percentage between 0 and 100.")
+        if not(args.max_gap >= 0): 
+            raise argparse.ArgumentError("Maximum intergenic gap should be a positive number.")
+        if not(args.max_length >= 1): 
+            raise argparse.ArgumentError("Maximum cluster length should be strictly positive.")
+        if not(args.min_hits >= 1): 
+            raise argparse.ArgumentError("Minimum number of hits in a cluster should be strictly positive.")
+        if not(args.min_cov_qrs >= 1): 
+            raise argparse.ArgumentError("Minimum number of covered queries in a cluster should be strictly positive.")
+        if not(set(args.require) <= {f.stem for f in args.query_folder.glob('*cif')}):
+            raise argparse.ArgumentError("A required query cannot be found in your query folder. Please check the filenames.")
+        
+        # Remote-specific checks
+        if args.mode == 'remote':
+            db = args.db
+            if not(args.mapping_table_path.is_file()):
+                raise argparse.ArgumentError("UniProt mapping table path does not exist or is not a file.")
+        elif args.mode == 'local':
+            db = ["local"]
+            if not(args.local_db_path.is_file()):
+                raise argparse.ArgumentError("Local FoldSeek DB does not seem to exist.")
+            if not(args.cds_db_path.is_file()):
+                raise argparse.ArgumentError("CDS mapping table path does not exist or is not a file.")
+                
+    except argparse.ArgumentError as err:
+        LOG.critical(err)
+        raise err
     
-    assert args.mode in ['local', 'remote'], 'Invalid search mode. Possible choices: "local" and "remote".'
-    assert set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}, "Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'."
-    assert args.query_folder.exists() and args.query_folder.is_dir() and any(args.query_folder.glob('*cif')), 'Query folder path does not exist or does not contain cif files.'
-    assert args.cores > 0, 'Number of cores must be strictly positive.'
-    assert args.max_workers > 0, 'Number of workers must be positive.'
-    assert args.max_eval <= 1 and args.max_eval > 0, 'Maximum e-value should be a number between 0 and 1.'
-    assert args.min_seqid >= 0 and args.min_seqid <= 100, "Minimum sequence identity should be a percentage between 0 and 100."
-    assert args.min_score >= 0, "Minimum FoldSeek bitscore should be a positive number."
-    assert args.min_qcov >= 0 and args.min_qcov <= 100, "Minimum query coverage should be a percentage between 0 and 100."
-    assert args.min_tcov >= 0 and args.min_tcov <= 100, "Minimum target coverage should be a percentage between 0 and 100."
-    assert args.max_gap >= 0, "Maximum intergenic gap should be a positive number."
-    assert args.max_length >= 1, "Maximum cluster length should be strictly positive."
-    assert args.min_hits >= 1, "Minimum number of hits in a cluster should be strictly positive."
-    assert args.min_cov_qrs >= 1, "Minimum number of covered queries in a cluster should be strictly positive."
-    assert set(args.require) <= {f.stem for f in args.query_folder.glob('*cif')}, "A required query cannot be found in your query folder. Please check the filenames."
-    if args.mode == 'remote':
-        db = args.db
-        assert args.mapping_table_path.exists() and args.mapping_table_path.is_file(), "UniProt mapping table path does not exist or is not a file."
-    elif args.mode == 'local':
-        db = ["local"]
-        assert args.local_db_path.exists(), "Local FoldSeek DB does not seem to exist."
-        assert args.cds_db_path.exists() and args.cds_db_path.is_file(), "CDS mapping table path does not exist or is not a file."
-    
-    # Configure the logger
+    ## Configure the logger
     log_levels = {0: logging.CRITICAL,
                   1: logging.ERROR,
                   2: logging.WARNING,
@@ -134,7 +175,8 @@ def parseArguments(args) -> dict:
         handlers = [logging.StreamHandler(sys.stdout)]
         )
     
-    # Parse the arguments
+    ## Parse the arguments
+    # Search parameters
     params = {'mode': args.mode,
               'cores': args.cores,
               'verbosity': args.verbosity,
@@ -155,6 +197,7 @@ def parseArguments(args) -> dict:
               'all_layouts': args.all_layouts
               }
     
+    # File paths
     paths = {'query' : {q.stem: q.resolve() for q in args.query_folder.glob('*.cif')},
              'uniprot_mapping' : args.mapping_table_path.resolve(),
              'cds_db_path' : args.cds_db_path.resolve(),
@@ -162,26 +205,30 @@ def parseArguments(args) -> dict:
              'output_folder' : args.output.resolve(),
              'temp_folder': args.temp.resolve()
              }
+    # Check the most important paths
     try:
         paths['output_folder'].mkdir(parents = True)
-    except FileExistsError:
+    except FileExistsError as err:
         if args.force:
             LOG.warning('Output folder already exists, but it will be overwritten.')
         else:
-            LOG.error('Output folder already exists! Rerun with -f to overwrite it.')
-            sys.exit()
+            msg = 'Output folder already exists! Rerun with -f to overwrite it.'
+            LOG.error(msg)
+            raise err
+            
     if str(paths['temp_folder']) != tempfile.gettempdir():
         try:
             paths['temp_folder'].mkdir(parents = True)
-        except FileExistsError:
+        except FileExistsError as err:
             if args.force:
                 LOG.warning('Temporary folder already exists, but it will be overwritten.')
             else:
-                LOG.error('Temporary folder already exists! Rerun with -f to overwrite it.')
-                sys.exit()
+                msg = 'Temporary folder already exists! Rerun with -f to overwrite it.'
+                LOG.error(msg)
+                raise err
     paths['temp_folder'] = Path(tempfile.mkdtemp(dir = paths['temp_folder']))
     
-    
+    # Output flags
     output_flags = {'tables': args.output_tables,
                     'session': args.output_session,
                     'summary': args.output_summary,
@@ -191,6 +238,7 @@ def parseArguments(args) -> dict:
                     'foldseek': args.output_foldseek
                     }
     
+    # Gather all parameters
     parsed_args = {'params': params,
                    'paths': paths,
                    'output_flags': output_flags
@@ -201,8 +249,8 @@ def parseArguments(args) -> dict:
 
 def main():
     # First we parse the arguments:
-    args = getArguments()
-    parsed_args = parseArguments(args)
+    args = get_arguments()
+    parsed_args = parse_arguments(args)
     
     # Then we initiate the right workflow
     if parsed_args['params']['mode'] == 'remote':
@@ -222,11 +270,6 @@ def main():
                               output_folder = parsed_args['paths']['output_folder'],
                               temp_folder = parsed_args['paths']['temp_folder']
                               )
-    else:
-        LOG.critical("Invalid search mode!")
-        LOG.critical(f"Search mode requested: {parsed_args['params']['mode']}")
-        sys.exit()
-    
     # Run the workflow    
     LOG.info("STARTING SEARCH")
     the_run.run()

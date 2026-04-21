@@ -11,6 +11,7 @@ import polars as pl
 from pathlib import Path
 from tqdm.contrib.concurrent import thread_map
 
+
 LOG = logging.getLogger(__name__)
 logging.basicConfig(
     level = logging.INFO,
@@ -20,9 +21,19 @@ logging.basicConfig(
     )
 
 
-def _parse_arguments() -> argparse.Namespace:
+def parse_arguments() -> argparse.Namespace:
+    """
+    This function parses the arguments given through the command line.
+    
+    Args:
+        None
+    
+    Returns:
+        A Namespace object holding the parsed arguments
+    """
+    
     parser = argparse.ArgumentParser(
-        prog = 'build_cds_db.py',
+        prog = 'cfoldseeker-cds',
                 epilog = 
                 """
                 Lucas De Vrieze, Miguel Biltjes
@@ -49,7 +60,11 @@ def _parse_arguments() -> argparse.Namespace:
 
     args = parser.parse_args()
     
-    assert args.input.exists() and args.input.is_dir(), 'Input folder does not exist.'
+    if not args.input.is_dir():
+        msg = 'Input folder does not exist.'
+        LOG.critical(msg)
+        raise argparse.ArgumentError(msg)
+    
     match args.mode:
         case 'ncbi-gff' | 'bakta-gff':
             any(args.input.glob('*.gff')), "Input folder does not contain GFF files (mind the .gff extension)."
@@ -59,12 +74,14 @@ def _parse_arguments() -> argparse.Namespace:
             any(args.input.glob('*.tsv')), "Input folder does not contain TSV files (mind the .tsv extension)."
         case 'excel':
             any(args.input.glob('*.xlsx')), "Input folder does not contain Excel files (mind the .xlsx extension)."
+    
     if args.output.exists():
         if args.force:
             LOG.warning("Output already exists, but it will be overwritten.")
         else:
-            LOG.error("Output already exists! Rerun with -f to overwrite it.")
-            sys.exit()
+            msg = "Output already exists! Rerun with -f to overwrite it."
+            LOG.error(msg)
+            raise IOError(msg)
     else:
         args.output.parent.mkdir(parents = True, exist_ok = True)
     
@@ -73,7 +90,25 @@ def _parse_arguments() -> argparse.Namespace:
 
 def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl.DataFrame:
     """
-    Parse one NCBI GFF file into a Polars DataFrame
+    Parses a single NCBI GFF file into a Polars DataFrame.
+    
+    Extracts CDS features and their associated metadata from an NCBI-formatted GFF file,
+    including taxonomic ID, gene tags, product names, genomic coordinates, and strand
+    information. Aggregates exon coordinates for multi-exon CDS records.
+    
+    Args:
+        numbered_filepath (tuple): A tuple containing (index, Path) where index is the file
+            number and Path is the file path to the GFF file.
+        in_package (bool): If True, extracts filename from parent directory (for NCBI package
+            structure). If False, uses file stem as filename. Defaults to False.
+    
+    Returns:
+        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
+        taxon_id, and filename. Exons are aggregated into comma-separated coordinates.
+        
+    Note:
+        The column filename is a temporary column that is removed by a later method in the workflow.
+        It is necessary to construct a taxon name column with NCBI Assembly accession IDs.
     """
     df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = False, comment_prefix = '#',
                      new_columns = ['seqid', 'source', 'type', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
@@ -112,7 +147,19 @@ def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> p
 
 def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
     """
-    Parse one Bakta GFF file into a Polars DataFrame
+    Parses a single Bakta GFF file into a Polars DataFrame.
+    
+    Extracts CDS features and metadata from a Bakta-formatted GFF file, including
+    locus tags, product names, genomic coordinates, and strand information. Aggregates
+    exon coordinates for multi-exon CDS records.
+    
+    Args:
+        numbered_filepath (tuple): A tuple containing (index, Path) where index is used as
+            the generic taxon ID and Path is the file path to the GFF file.
+    
+    Returns:
+        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
+        taxon_id, and filename. Exons are aggregated into comma-separated coordinates.
     """
     df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = False, comment_prefix = '#',
                      new_columns = ['seqid', 'source', 'type', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
@@ -146,7 +193,19 @@ def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
 
 def _parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
     """
-    Parse one TSV file into a Polars DataFrame
+    Parses a single TSV file into a Polars DataFrame.
+    
+    Reads a tab-separated values file with CDS coordinate data. Expected header:
+    gene_tag, name, contig, start, end, strand, taxon_id, taxon_name. Aggregates
+    exon coordinates for multi-exon CDS records.
+    
+    Args:
+        numbered_filepath (tuple): A tuple containing (index, Path) where index is unused
+            and Path is the file path to the TSV file.
+    
+    Returns:
+        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
+        taxon_id, taxon_name. Exons are aggregated into comma-separated coordinates.
     """
     # Envisioned header: ['gene_tag', 'name', 'contig', 'start', 'end', 'strand', 'taxon_id', 'taxon_name']
     # Exons at multiple lines
@@ -164,7 +223,19 @@ def _parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
 
 def _parse_one_excel(numbered_filepath: tuple) -> pl.DataFrame:
     """
-    Parse one Excel file into a Polars DataFrame
+    Parses a single Excel file into a Polars DataFrame.
+    
+    Reads an Excel spreadsheet with CDS coordinate data. Expected header:
+    gene_tag, name, contig, start, end, strand, taxon_id, taxon_name. Aggregates
+    exon coordinates for multi-exon CDS records.
+    
+    Args:
+        numbered_filepath (tuple): A tuple containing (index, Path) where index is unused
+            and Path is the file path to the Excel file.
+    
+    Returns:
+        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
+        taxon_id, taxon_name. Exons are aggregated into comma-separated coordinates.
     """
     # Envisioned header: ['gene_tag', 'name', 'contig', 'start', 'end', 'strand', 'taxon_id', 'taxon_name']
     # Exons at multiple lines
@@ -180,9 +251,27 @@ def _parse_one_excel(numbered_filepath: tuple) -> pl.DataFrame:
     return cds_record.collect()
 
 
-def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = True) -> pl.DataFrame:
+def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = False) -> pl.DataFrame:
     """
-    Parses all input files and returns a draft CDS coordinates DB.
+    Parses all input files and constructs a draft CDS coordinates database.
+    
+    Dispatches file parsing based on the specified parsing mode, using
+    parallel processing to handle multiple files efficiently. Concatenates all parsed
+    results into a single DataFrame.
+    
+    Args:
+        input_path (Path): Path to the folder containing input files.
+        parsing_mode (str): File format mode - one of: 'ncbi-gff', 'ncbi-package',
+            'bakta-gff', 'tsv', or 'excel'.
+        n_workers (int): Number of worker threads for parallel file parsing.
+            Defaults to 1.
+        no_progress (bool): If True, suppresses the progress bar during parsing.
+            Defaults to False.
+    
+    Returns:
+        A Polars DataFrame containing concatenated CDS records from all input files
+        with columns: gene_tag, name, contig, coords, strand, taxon_id, and filename
+        (or taxon_name for TSV/Excel formats).
     """
     # Parse all GFFs
     match parsing_mode:
@@ -222,7 +311,29 @@ def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_pro
 
 def check_duplicate_contigs(cds_db: pl.DataFrame, parsing_mode: str) -> pl.DataFrame:
     """
-    Checks for duplicate contig labels per taxon. Tries to correct these in case of Bakta GFFs.
+    Check for and attempt to fix duplicate contig labels per taxon.
+    
+    Detects cases where the same contig label appears in multiple taxa. For
+    Bakta GFF files, attempts to prepend the existing locus tag prefix to make contigs
+    unique. For other formats, exits with an error.
+    
+    Args:
+        cds_db (polars.DataFrame): A dataframe containing CDS records with 'contig',
+            'taxon_id', and 'gene_tag' columns.
+        parsing_mode (str)): The format mode used for parsing ('bakta-gff', 'ncbi-gff',
+            'ncbi-package', 'tsv', or 'excel').
+    
+    Returns:
+        cds_db (polars.DataFrame): The input DataFrame with modified contig labels if a fix
+            was applied (Bakta mode only).
+            
+    Mutates: 
+        cds_db (polars.DataFrame): The input DataFrame with modified contig labels if a fix
+            was applied (Bakta mode only).
+                
+    Raises:
+        RuntimeError: If duplicate contigs are detected and cannot be fixed, or if
+            fix attempt fails.    
     """
     # Check that no contig label occurs in combination with multiple taxon IDs
     contig_taxa_combs = cds_db.group_by(['contig']).agg(pl.col('taxon_id').unique())
@@ -231,54 +342,99 @@ def check_duplicate_contigs(cds_db: pl.DataFrame, parsing_mode: str) -> pl.DataF
     if multi_taxa_contig.any():
         LOG.error("Detected duplicate contig labels for a taxon!")
         
-        # In case of Bakta GFFs, we may still fix this if Bakta autogenerated a unique assembly ID.
+        # In case of Bakta GFFs, we may still fix this if Bakta autogenerated a unique locus tax prefix,
+        # by prepending that locus tag prefix
         if parsing_mode == 'bakta-gff':
             LOG.error("Trying to fix this by prepending the locus tag prefix...")
-            # Prepend gene tag prefix as a potential fix
+            # Extract the gene tag prefix
             cds_db = cds_db.with_columns(locus_tag_prefix = pl.col('gene_tag').str.split('_').list.reverse().list.slice(1).list.reverse().list.join('_'))
+            # Preprend it
             cds_db = cds_db.with_columns(contig = pl.concat_str(['contig', 'locus_tag_prefix'], separator = '_'))
             cds_db = cds_db.drop('locus_tag_prefix')
             
             # Check if fix succeeded
-            # No contig label occurring in combination with multiple taxon IDs
+            # => No contig label occurring in combination with multiple taxon IDs
             contig_taxa_combs_fixed = cds_db.group_by(['contig']).agg(pl.col('taxon_id').unique())
             nb_contig_taxa_combs_fixed = contig_taxa_combs_fixed.with_columns(nb_combs = pl.col('taxon_id').list.len())
+            
             multi_taxa_contig_fixed = nb_contig_taxa_combs_fixed['nb_combs'] > 1
-            # Not all contig labels are unqiue
             contigs_fixed_counts = not(cds_db.select('contig').is_duplicated().any())
+            
+            # If Not all contig labels are unique despite the fix
             if multi_taxa_contig_fixed.any() and contigs_fixed_counts:
-                LOG.critical('Fix failed! Exiting.')
-                sys.exit()
+                msg = 'Duplicate gene tag fix failed! Exiting.'
+                LOG.critical(msg)
+                raise RuntimeError(msg)
             else:
-                LOG.error('Fix succeeded, but I had to change your contig labels!')
+                LOG.warning('Fix succeeded, but I had to change your contig labels!')
         
         # For other input types, we don't provide a potential fix
         else:
-            LOG.critical("Please make sure your contig labels are unique for each taxon! Exiting.")
-            sys.exit()
+            msg = "Duplicate contig labels detected for a taxon! No fix provided for this parsing mode."
+            LOG.critical(msg)
+            raise RuntimeError(msg)
             
     return cds_db
 
 
-def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str) -> pl.DataFrame:
+def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str, max_attempts: int) -> pl.DataFrame:
     """
-    Sets the taxon labels. Taxon names are more human-friendly, while filenames are better for downstream data joining purposes
+    Set taxon labels as either scientific names or filenames.
+    
+    For NCBI files, optionally fetches the scientific names from NCBI Taxonomy
+    via BioPython's NCBI Entrez API with retry logic.
+    For Bakta GFF files, generates generic labels or uses filenames.
+    For TSV and Excel files, preserves user-provided annotations.
+    
+    Args:
+        cds_db (polars DataFrame): Dataframe containing CDS records with 'taxon_id',
+            'filename', and optionally 'gene_tag' columns.
+        use_taxa (bool): If True, uses scientific names (NCBI) or generates generic
+            names (Bakta). If False, uses filenames as taxon labels.
+        parsing_mode (str)): The format mode used for parsing ('ncbi-gff', 'ncbi-package',
+            'bakta-gff', 'tsv', or 'excel').
+        max_attempts (int): Maximum numbers of times to attempt fetching the taxon names
+            using Entrez.
+        
+    Returns:
+        cds_db (polars.DataFrame): The input DataFrame with a new 'taxon_name' column and
+            the 'filename' column removed.
+            
+    Mutates:
+        cds_db (polars.DataFrame): The input DataFrame with a new 'taxon_name' column and
+            the 'filename' column removed.
+            
+    Note:
+        This function removes the temporary column 'filename' if present, as it may
+        have been introduced when parsing NCBI GFF files.
     """
     # In case of NCBI files
     if 'ncbi' in parsing_mode:
+        # Fetch all taxon names if requested
         if use_taxa:
-            # Fetch all taxon names
             LOG.info('Fetching taxon names using NCBI Entrez')
             all_taxon_ids = cds_db.select('taxon_id').unique().to_series().to_list()
-            with Entrez.esummary(db = 'taxonomy', id = all_taxon_ids) as handle:
-                records = list(Entrez.read(handle))
-            all_taxon_names = [str(i['ScientificName']) for i in records]
+            for attempt in range(max_attempts):
+                try:
+                    with Entrez.esummary(db = 'taxonomy', id = all_taxon_ids) as handle:
+                        records = list(Entrez.read(handle))
+                    all_taxon_names = [str(i['ScientificName']) for i in records]
+                    break
+                except:
+                    if attempt+1<max_attempts:
+                        LOG.warning(f'Failed fetching taxon names in attempt {attempt+1}. Retrying...')
+                        continue
+                    else:
+                        msg = f'Failed fetching taxon names in {max_attempts} attempts. Giving up...'
+                        LOG.error(msg)
+                        raise RuntimeError(msg)
             
             # Join with the CDS DB
             LOG.info('Adding taxon name column')
             id_name_map = pl.DataFrame({'taxon_id': all_taxon_ids, 'taxon_name': all_taxon_names})
             cds_db = cds_db.join(id_name_map, on = 'taxon_id', how = 'left', maintain_order = "left")
-        # If not, use filenames
+        
+        # If not requested, use filenames
         else:
             cds_db = cds_db.with_columns(pl.col('filename').alias('taxon_name'))
             
@@ -301,8 +457,16 @@ def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str) ->
 
 
 def main():
+    """
+    Main entry point for the CDS database construction tool.
+    
+    Orchestrates the complete workflow: parses command-line arguments, loads
+    and parses input files, validates contig uniqueness, assigns taxon labels,
+    and writes the final CDS coordinates database to disk as a tab-separated file.
+    Supports optional gzip compression.
+    """
     # Process arguments
-    args = _parse_arguments()
+    args = parse_arguments()
     cores = args.cores
     input_path = args.input
     output_path = args.output
