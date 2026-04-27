@@ -13,6 +13,7 @@ from importlib.metadata import version
 
 from cfoldseeker.remote import RemoteSearch
 from cfoldseeker.local import LocalSearch
+from cfoldseeker.local_clustered import LocalClusteredSearch
 
 __version__ = version("cfoldseeker")
 
@@ -47,7 +48,7 @@ def get_arguments() -> argparse.Namespace:
                 )
     
     args_general = parser.add_argument_group('General')
-    args_general.add_argument('-m', '--mode', dest = 'mode', default = 'remote', type = str, choices = ['local', 'remote'], help = "Search mode (default: remote)")
+    args_general.add_argument('-m', '--mode', dest = 'mode', default = 'remote', type = str, choices = ['local', 'local_clustered', 'remote'], help = "Search mode (default: remote)")
     args_general.add_argument('-c', '--cores', dest = 'cores', default = 1, type = int, help = "Number of cores available to use (default: 1)")          
     args_general.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', help = "Force overwriting output (default: false).")
     args_general.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4], help = "Console verbosity level (default: 3 (info))")
@@ -94,6 +95,10 @@ def get_arguments() -> argparse.Namespace:
     args_local.add_argument('-ldb', '--local-db', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
     args_local.add_argument('-cdb', '--cds-coords-db', dest = 'cds_db_path', type = Path, default = Path('local_cds_db.gz'), help = "Path of the CDS coordinates DB (default: local_cds_db.gz).")
     
+    args_local_clustered = parser.add_argument_group('Local-clustered-specific search options')
+    args_local_clustered.add_argument('-scl', '--seq-clusters', dest = "seq_clusters", type = Path, default = Path('clu.tsv'),
+                                      help = "Path to MMseqs2 clustering table TSV file (default: clu.tsv).")
+    
     args = parser.parse_args()
     
     return args
@@ -114,7 +119,7 @@ def parse_arguments(args) -> dict:
     """
     ## Validate arguments
     try:
-        if args.mode not in ['local', 'remote']:
+        if args.mode not in ['local', 'remote', 'local_clustered']:
             raise argparse.ArgumentError('Invalid search mode. Possible choices: "local" and "remote".')
         if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
             raise argparse.ArgumentError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
@@ -146,16 +151,21 @@ def parse_arguments(args) -> dict:
             raise argparse.ArgumentError("A required query cannot be found in your query folder. Please check the filenames.")
         
         # Remote-specific checks
-        if args.mode == 'remote':
-            db = args.db
-            if not(args.mapping_table_path.is_file()):
-                raise argparse.ArgumentError("UniProt mapping table path does not exist or is not a file.")
-        elif args.mode == 'local':
-            db = ["local"]
-            if not(args.local_db_path.is_file()):
-                raise argparse.ArgumentError("Local FoldSeek DB does not seem to exist.")
-            if not(args.cds_db_path.is_file()):
-                raise argparse.ArgumentError("CDS mapping table path does not exist or is not a file.")
+        match args.mode:
+            case 'remote':
+                db = args.db
+                if not(args.mapping_table_path.is_file()):
+                    raise argparse.ArgumentError("UniProt mapping table path does not exist or is not a file.")
+            case 'local':
+                db = ["local"]
+                if not(args.local_db_path.is_file()):
+                    raise argparse.ArgumentError("Local FoldSeek DB does not exist.")
+                if not(args.cds_db_path.is_file()):
+                    raise argparse.ArgumentError("CDS mapping table path does not exist or is not a file.")
+            case 'local_clustered':
+                db = ['local']
+                if not(args.seq_clusters.is_file()):
+                    raise argparse.ArgumentError("MMseqs2 clustering table does not exist.")
                 
     except argparse.ArgumentError as err:
         LOG.critical(err)
@@ -203,7 +213,8 @@ def parse_arguments(args) -> dict:
              'cds_db_path' : args.cds_db_path.resolve(),
              'local_db_path' : args.local_db_path.resolve(),
              'output_folder' : args.output.resolve(),
-             'temp_folder': args.temp.resolve()
+             'temp_folder': args.temp.resolve(),
+             'seq_clusters': args.seq_clusters.resolve()
              }
     # Check the most important paths
     try:
@@ -253,23 +264,35 @@ def main():
     parsed_args = parse_arguments(args)
     
     # Then we initiate the right workflow
-    if parsed_args['params']['mode'] == 'remote':
-        LOG.info("Launching cfoldseeker in remote mode")
-        the_run = RemoteSearch(query = parsed_args['paths']['query'],
-                               mapping_table_path = parsed_args['paths']['uniprot_mapping'],
-                               params = parsed_args['params'],
-                               output_folder = parsed_args['paths']['output_folder'],
-                               temp_folder = parsed_args['paths']['temp_folder']
-                               )
-    elif parsed_args['params']['mode'] == 'local':
-        LOG.info("Launching cfoldseeker in local mode")
-        the_run = LocalSearch(query = parsed_args['paths']['query'],
-                              db_path = parsed_args['paths']['local_db_path'],
-                              coord_db_path = parsed_args['paths']['cds_db_path'],
-                              params = parsed_args['params'],
-                              output_folder = parsed_args['paths']['output_folder'],
-                              temp_folder = parsed_args['paths']['temp_folder']
-                              )
+    match parsed_args['params']['mode']:
+        case 'remote':
+            LOG.info("Launching cfoldseeker in remote mode")
+            the_run = RemoteSearch(query = parsed_args['paths']['query'],
+                                   mapping_table_path = parsed_args['paths']['uniprot_mapping'],
+                                   params = parsed_args['params'],
+                                   output_folder = parsed_args['paths']['output_folder'],
+                                   temp_folder = parsed_args['paths']['temp_folder']
+                                   )
+        case 'local':
+            LOG.info("Launching cfoldseeker in local mode")
+            the_run = LocalSearch(query = parsed_args['paths']['query'],
+                                  db_path = parsed_args['paths']['local_db_path'],
+                                  coord_db_path = parsed_args['paths']['cds_db_path'],
+                                  params = parsed_args['params'],
+                                  output_folder = parsed_args['paths']['output_folder'],
+                                  temp_folder = parsed_args['paths']['temp_folder']
+                                  )
+        case 'local_clustered':
+            LOG.info("Launching cfoldseeker in local-clustered mode")
+            the_run = LocalClusteredSearch(query = parsed_args['paths']['query'],
+                                           db_path = parsed_args['paths']['local_db_path'],
+                                           coord_db_path = parsed_args['paths']['cds_db_path'],
+                                           params = parsed_args['params'],
+                                           output_folder = parsed_args['paths']['output_folder'],
+                                           temp_folder = parsed_args['paths']['temp_folder'],
+                                           seq_clust_tsv = parsed_args['paths']['seq_clusters']
+                                           )
+            
     # Run the workflow    
     LOG.info("STARTING SEARCH")
     the_run.run()
