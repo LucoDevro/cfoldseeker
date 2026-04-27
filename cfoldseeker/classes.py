@@ -157,7 +157,7 @@ class Hit:
         
         Returns:
             int: Sum of lengths across all exons, calculated as
-                 |end - start + 1| for each exon.
+                 (end - start + 1) for each exon.
         """
         return sum([abs(c[1] - c[0] + 1) for c in self.coords])
     

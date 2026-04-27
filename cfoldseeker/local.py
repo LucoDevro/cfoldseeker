@@ -119,7 +119,7 @@ class LocalSearch(Search):
             None
             
         Raises:
-            SystemExit: If FoldSeek returns a non-zero exit code.
+            RuntimeError: If FoldSeek returns a non-zero exit code.
             
         Note:
             FoldSeek output is written to a temporary TSV file in TEMP_DIR.
@@ -174,14 +174,14 @@ class LocalSearch(Search):
             LOG.critical(msg)
             raise RuntimeError(msg)
         else:
-            LOG.info('{foldseek_executable.name} finished successfully.')
+            LOG.info(f'{foldseek_executable.name} finished successfully.')
     
         return None        
     
     
     def parse_foldseek_results(self) -> None:
         """
-        Pars the FoldSeek result table and generate Hit objects with filled genomic coordinates.
+        Parse the FoldSeek result table and generate Hit objects with filled genomic coordinates.
         
         Reads the FoldSeek result table, applies filtering thresholds (bit score,
         query coverage, target coverage), removes duplicate hits, and joins results
