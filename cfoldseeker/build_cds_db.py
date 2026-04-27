@@ -47,9 +47,9 @@ def parse_arguments() -> argparse.Namespace:
                 add_help = False
                 )
     
-    parser.add_argument('-i', '--input', dest = 'input', type = Path, default = Path('.'), help = "Path to folder containing the input files (default: current directory)")
-    parser.add_argument('-m', '--mode', dest = 'mode', type = str, required = True, choices = ['ncbi-gff', 'ncbi-package', 'bakta-gff', 'tsv', 'excel'],
-                        help = 'File parsing mode (choices: ncbi-gff, bakta-gff, tsv, excel).')
+    parser.add_argument('-i', '--input', dest = 'input', type = Path, default = Path('.'), help = "Path to folder holding the input files or NCBI package (default: current directory)")
+    parser.add_argument('-m', '--mode', dest = 'mode', type = str, required = True, choices = ['ncbi-gff', 'ncbi-package', 'bakta-gff', 'tsv'],
+                        help = 'File parsing mode (choices: ncbi-gff, ncbi-package, bakta-gff, tsv).')
     parser.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('local_db'), help = "Filepath to save CDS coordinate DB (default: local_db).")
     parser.add_argument('-gz', '--gzip', dest = 'gzip', default = False, action = 'store_true', help = "Gzip output (default: False).")
     parser.add_argument('-tn', '--use-taxon-names', dest = 'use_taxa', default = False, action = 'store_true', help = "Use taxon names as labels for all files instead of filenames (default: False).")
@@ -72,8 +72,6 @@ def parse_arguments() -> argparse.Namespace:
             any(args.input.glob('ncbi_dataset/data/*/genomic.gff')), "NCBI package does not contain GFF files."
         case 'tsv':
             any(args.input.glob('*.tsv')), "Input folder does not contain TSV files (mind the .tsv extension)."
-        case 'excel':
-            any(args.input.glob('*.xlsx')), "Input folder does not contain Excel files (mind the .xlsx extension)."
     
     if args.output.exists():
         if args.force:
@@ -221,36 +219,6 @@ def _parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
     return cds_record.collect()
 
 
-def _parse_one_excel(numbered_filepath: tuple) -> pl.DataFrame:
-    """
-    Parses a single Excel file into a Polars DataFrame.
-    
-    Reads an Excel spreadsheet with CDS coordinate data. Expected header:
-    gene_tag, name, contig, start, end, strand, taxon_id, taxon_name. Aggregates
-    exon coordinates for multi-exon CDS records.
-    
-    Args:
-        numbered_filepath (tuple): A tuple containing (index, Path) where index is unused
-            and Path is the file path to the Excel file.
-    
-    Returns:
-        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
-        taxon_id, taxon_name. Exons are aggregated into comma-separated coordinates.
-    """
-    # Envisioned header: ['gene_tag', 'name', 'contig', 'start', 'end', 'strand', 'taxon_id', 'taxon_name']
-    # Exons at multiple lines
-    df = pl.read_excel(numbered_filepath[1], has_header = True).lazy()
-    
-    # Populate the CDS coords DB
-    cds_record = df.with_columns(pl.concat_str(['start', 'end'], separator = '..').alias('coords'))
-    cds_record = cds_record.drop(['start', 'end'])
-    
-    # Aggregate multiple CDSes (i.e. exons) in one record
-    cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
-    
-    return cds_record.collect()
-
-
 def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = False) -> pl.DataFrame:
     """
     Parses all input files and constructs a draft CDS coordinates database.
@@ -262,7 +230,7 @@ def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_pro
     Args:
         input_path (Path): Path to the folder containing input files.
         parsing_mode (str): File format mode - one of: 'ncbi-gff', 'ncbi-package',
-            'bakta-gff', 'tsv', or 'excel'.
+            'bakta-gff', or 'tsv'.
         n_workers (int): Number of worker threads for parallel file parsing.
             Defaults to 1.
         no_progress (bool): If True, suppresses the progress bar during parsing.
@@ -271,34 +239,33 @@ def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_pro
     Returns:
         A Polars DataFrame containing concatenated CDS records from all input files
         with columns: gene_tag, name, contig, coords, strand, taxon_id, and filename
-        (or taxon_name for TSV/Excel formats).
+        (or taxon_name for TSV formats).
     """
     # Parse all GFFs
     match parsing_mode:
         case 'ncbi-gff':
             LOG.info('Parsing all input files as NCBI GFFs')
             parsed_gffs_to_concat = thread_map(_parse_one_ncbi_gff, list(enumerate(input_path.glob('*.gff'))),
+                                               max_workers = n_workers,
                                                leave = False,
                                                disable = no_progress)
         case 'ncbi-package':
             LOG.info('Parsing all input files as an NCBI GFF package')
             parsed_gffs_to_concat = thread_map(lambda x: _parse_one_ncbi_gff(x, in_package = True), 
                                                list(enumerate(input_path.glob('ncbi_dataset/data/*/genomic.gff'))),
+                                               max_workers = n_workers,
                                                leave = False,
                                                disable = no_progress)
         case 'bakta-gff':
             LOG.info('Parsing all input files as Bakta GFFs')
             parsed_gffs_to_concat = thread_map(_parse_one_bakta_gff, list(enumerate(input_path.glob('*.gff'))),
+                                               max_workers = n_workers,
                                                leave = False,
                                                disable = no_progress)
         case 'tsv':
             LOG.info('Parsing all input files as TSVs')
             parsed_gffs_to_concat = thread_map(_parse_one_tsv, list(enumerate(input_path.glob('*.tsv'))),
-                                               leave = False,
-                                               disable = no_progress)
-        case 'excel':
-            LOG.info('Parsing all input files as Excel files')
-            parsed_gffs_to_concat = thread_map(_parse_one_excel, list(enumerate(input_path.glob('*.xlsx'))),
+                                               max_workers = n_workers,
                                                leave = False,
                                                disable = no_progress)
                 
@@ -321,7 +288,7 @@ def check_duplicate_contigs(cds_db: pl.DataFrame, parsing_mode: str) -> pl.DataF
         cds_db (polars.DataFrame): A dataframe containing CDS records with 'contig',
             'taxon_id', and 'gene_tag' columns.
         parsing_mode (str)): The format mode used for parsing ('bakta-gff', 'ncbi-gff',
-            'ncbi-package', 'tsv', or 'excel').
+            'ncbi-package', or 'tsv').
     
     Returns:
         cds_db (polars.DataFrame): The input DataFrame with modified contig labels if a fix
@@ -377,14 +344,14 @@ def check_duplicate_contigs(cds_db: pl.DataFrame, parsing_mode: str) -> pl.DataF
     return cds_db
 
 
-def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str, max_attempts: int) -> pl.DataFrame:
+def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str, max_attempts: int = 3) -> pl.DataFrame:
     """
     Set taxon labels as either scientific names or filenames.
     
     For NCBI files, optionally fetches the scientific names from NCBI Taxonomy
     via BioPython's NCBI Entrez API with retry logic.
     For Bakta GFF files, generates generic labels or uses filenames.
-    For TSV and Excel files, preserves user-provided annotations.
+    For TSV files, preserves user-provided annotations.
     
     Args:
         cds_db (polars DataFrame): Dataframe containing CDS records with 'taxon_id',
@@ -392,9 +359,9 @@ def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str, ma
         use_taxa (bool): If True, uses scientific names (NCBI) or generates generic
             names (Bakta). If False, uses filenames as taxon labels.
         parsing_mode (str)): The format mode used for parsing ('ncbi-gff', 'ncbi-package',
-            'bakta-gff', 'tsv', or 'excel').
+            'bakta-gff', or 'tsv').
         max_attempts (int): Maximum numbers of times to attempt fetching the taxon names
-            using Entrez.
+            using Entrez. Defaults to 3.
         
     Returns:
         cds_db (polars.DataFrame): The input DataFrame with a new 'taxon_name' column and
