@@ -1,283 +1,252 @@
-Usage
-=====
+User guide
+============
 
-Normally, you don't have to choose between remote and local modes. **CAGEcleaner automatically recognises from the cblaster session in which mode it was generated and thus should be dereplicated.**
+``cfoldseeker`` has several search modes and helper tools, each one requiring different prior work to be done with MMseqs and/or FoldSeek.
+
+.. tip::
+
+   Each ``cfoldseeker`` command prints logs at the stdout. You can save them in a log file by ``tee``-ing.
+
+   .. code-block:: bash
+
+   		cfoldseeker ... | tee log_file.log
 
 Remote mode
-------------
+-----------
+The remote mode requires from you a set of protein structural models, and our copy of the UniProt ID mapping table (only the KEGG and GenPept rows of `the official mapping table <https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/idmapping/idmapping.dat.gz>`_).
 
-The remote mode does not require other file inputs than your cblaster session. A dereplication run using default settings can be started as simply as:
+Prior work
+~~~~~~~~~~
+Get structural models as CIF files of your query proteins, either experimentally or computationally (AlphaFold, ESMFold, OpenFold...). Collect them all in one folder ``query_models``.
 
-.. code-block:: bash
-
-	cagecleaner -s session.json
-
-A slightly more complex example to run CAGEcleaner at 14 cores in full-genome dereplication mode with an identity threshold of 90 % and a coverage threshold of 50 %.
-
-.. code-block:: bash
-
-	cagecleaner -s session.json --cores 14 -i 90 -c 50
-
-A more complicated example to run CAGEcleaner at 14 cores in region dereplication mode with both thresholds at 95 %, adding a sequence margin of 5 kb to both sides of each cluster, discarding clusters that are at a contig edge.
+The search
+~~~~~~~~~~
+Run ``cfoldseeker`` in remote mode using our UniProt mapping table ``uniprot_kegg_genpept.gz`` and save results in a new folder ``results``. Search the AFDB50, the AFDB-Proteome, the AFDB-SwissProt databases, using 4 workers for the cross-referencing APIs.
 
 .. code-block:: bash
 
-	cagecleaner -s session.json --cores 14 -i 90 -c 90 --method regions -m 5000 --strict
-
-A complex example that runs CAGEcleaner at 14 cores in region dereplication mode with the identity threshold at 95 %, the coverage threshold at 80 %, a sequence margin of size 10 kb, saving the results in a subfolder `results`, keeping all intermediate files, excluding a scaffold with a duplicate ID from the analysis, bypassing another one with a unique label, and disabling the hit recovery by outlier homology scores.
-
-.. code-block:: bash
-
-	cagecleaner -s session.json --cores 14 -i 95 -c 80 --method regions -m 10000 -o results --keep_intermediate --exs assembly1:ctg1 --bys ctg131 --no_recovery_score
-
+	cfoldseeker -m remote -q query_models -o results -rdb afdb50 afdb-proteome afdb-swissprot -w 4 -uma uniprot_kegg_genpept.gz
 
 Local mode
 ----------
+The local mode requires from you a set of query protein structures, a genomic context table made using ``cfoldseeker-cds``, and a FoldSeek target database.
 
-To get a local mode cblaster session, you probably have generated a local cblaster database from a folder of fasta or genbank files. In local mode, **CAGEcleaner needs the path to that folder** to be passed on via the ``-g`` flag. For each one of the examples in section above, you can just add the ``-g`` flag and that path to run CAGEcleaner from a local search session.
+Prior work
+~~~~~~~~~~
+**1.** Get structural models as CIF files of your query proteins, either experimentally or computationally (AlphaFold, ESMFold, OpenFold). Collect them all in one folder ``query_models``.
 
-A dereplication run using default settings can be started as simply as:
+**2.** Build a genomic context table using our provided helper tool ``cfoldseeker-cds``, which builds a context table directly from a set of NCBI or Bakta GFF files, or from a folder holding an extracted NCBI package of GFF files.
 
-.. code-block:: bash
+.. tip::
 
-	cagecleaner -s session.json -g genomes
+   ``cfoldseeker-cds`` usually produces context DBs populated with accession codes. Although using accession codes standardises analysis outputs greatly, they are not very human-friendly. Enable the ``-tn`` flag to make ``cfoldseeker-cds`` populate the context DB with **readily readable taxon names**. These names will recur in the outputs of a ``cfoldseeker`` analysis.
 
-A slightly more complex example to run CAGEcleaner at 14 cores in full-genome dereplication mode with an identity threshold of 90 % and a coverage threshold of 50 %.
+   In both NCBI modes, ``cfoldseeker-cds`` will fetch the taxon names from NCBI via the Entrez API. In Bakta mode, it will generate a generic taxon name. In TSV mode, it will trust the user's inputs.
 
-.. code-block:: bash
-
-	cagecleaner -s session.json -g genomes --cores 14 -i 90 -c 50
-
-A more complicated example to run CAGEcleaner at 14 cores in region dereplication mode with both thresholds at 95 %, adding a sequence margin of 5 kb to both sides of each cluster, discarding clusters that are at a contig edge.
-
-.. code-block:: bash
-
-	cagecleaner -s session.json -g genomes --cores 14 -i 95 -c 95 --method regions -m 5000 --strict
-
-A complex example that runs CAGEcleaner at 14 cores in region dereplication mode with the identity threshold at 95 %, the coverage threshold at 80 %, a sequence margin of size 10 kb, saving the results in a subfolder `results`, keeping all intermediate files, excluding a scaffold with a duplicate ID from the analysis, bypassing another one with a unique label, and disabling the hit recovery by outlier homology scores.
+To produce a compressed genomic context DB ``ncbi_package_db.gz`` from a default NCBI package (a folder ``ncbi_dataset``, which has an identically named subfolder):
 
 .. code-block:: bash
 
-	cagecleaner -s session.json -g genomes --cores 14 -i 95 -c 80 --method regions -m 10000 -o results --keep_intermediate --exs assembly1:ctg1 --bys ctg131 --no_recovery_score
+	cfoldseeker-cds -i ncbi-dataset -o ncbi_package_db.gz -m ncbi-package -gz
 
-Output files
-------------
+To produce a compressed context DB ``ncbi_files_db.gz`` populated with taxon names from a folder of NCBI GFF files ``gffs``:
 
-This tool produces at least six output files:
+.. code-block:: bash
 
-- ``filtered_session.json`` a filtered cblaster session file
-- ``filtered_binary.txt`` a cblaster binary presence/absence table, containing only the retained hits
-- ``filtered_summary.txt`` a cblaster summary file, containing only the retained hits
-- ``extended_binary.txt`` a cblaster binary table extended with the following columns
+	cfoldseeker-cds -i gffs -o ncbi_files_db.gz -m ncbi-gff -gz -tn
 
-	- ``Number`` Number of the cluster in the cblaster session
-	- ``Strand`` Tuple representing on which strand each query gene homolog was found.
-	- ``Layout_group`` Tuple representing in which layout/order the genes are ordered on the genome
-	- ``representative`` the representative genome or region
-	- ``dereplication_status`` status of this cluster (Was it removed/kept? Why?)
-	- ``assembly_file`` fasta file of the genome or region
+.. note::
 
-- ``retained_cluster_numbers.txt`` the cluster numbers of each retained hit
-- ``genome_cluster_sizes.txt`` a tab-separated text file with the number of genomes in each dereplication genome cluster
+   Keep in mind that ``cfoldseeker-cds`` gets the taxa names from the GFF filenames, or from the subfolders in the NCBI package. **Give your GFF files a unique name** (e.g. NCBI accession ID)!
 
-**In genome dereplication mode**, the file ``unmapped.scaffolds.txt`` may be generated. This file contains scaffold IDs for which no associated genome file was found. There are several reasons this might happen: ID mismatch between the session and the downloaded fasta file, a failed download...
+.. tip::
 
-Optionally, the downloaded sequence files and the dereplication output files generated by skDER or MMseqs2 can be saved in an additional subfolder ``downloads`` or ``dereplication``, resp. (see also flags ``keep_downloads``, ``--keep_dereplication``, and ``--keep_intermediate``).
+   cfoldseeker-cds DBs can be concatenated using ``cat``. No need to rerun the builder!
 
-In ``extended_binary.txt``, there are four possible dereplication statuses.
+**3.** Generate the target DB ``target_DB`` using ``foldseek createdb``. This prepares a FoldSeek DB from your folder containing the target set of protein structures (``input``). You probably don't have thousands of protein structures lingering around, so you will need FoldSeek's builtin support of **ProstT5**, a LLM that directly translates amino acid sequences into FoldSeek's internal 3Di alphabet, skipping protein model prediction. **This is the key step that allows searching sequence databases using structural similarity.**
 
-+--------------------------------+-----------------------------------------------------------------------------+
-| `dereplication_representative` | Part of the sequence selected as a sequence cluster representative.         |
-+--------------------------------+-----------------------------------------------------------------------------+
-| `readded_by_content`           | Kept due to a different group layout than the dereplication representative. |
-+--------------------------------+-----------------------------------------------------------------------------+
-| `readded_by_score`             | Kept due to an outlier homology score.                                      |
-+--------------------------------+-----------------------------------------------------------------------------+
-| `redundant`                    | Not retained and therefore removed.                                         |
-+--------------------------------+-----------------------------------------------------------------------------+
+First make sure you have downloaded ProstT5's weights.
 
-Input from TSV files
+.. code-block:: bash
+
+	foldseek databases ProstT5 <path-to-prostt5-weights> tmp
+
+Then you can build the FoldSeek DB directly from your protein sequences in ``input``.
+
+.. code-block:: bash
+
+	foldseek createdb input target_DB --prostt5-model <path-to-prostt5-weights>
+
+.. warning::
+
+   This is a **time- and computationally demanding** task! Consider using a GPU (by adding the ``--gpu 1`` flag if you have the hardware configured).
+
+.. tip::
+
+   FoldSeek offers a command to **merge existing DBs** ``foldseek concatdbs``. Use it to concat existing target DBs, and save time and computational work.
+
+The search
+~~~~~~~~~~
+Run ``cfoldseeker`` in local mode using FoldSeek DB ``target_DB``, and context DB ``cds_db.gz``. Save results in a new folder ``results``.
+
+.. code-block:: bash
+
+	cfoldseeker -m local -q query_models -o results -ldb target_DB/target_DB -cdb cds_db.gz
+
+Local-clustered mode
 --------------------
+The local-clustered mode requires a set of query protein structures, a genomic context table made using ``cfoldseeker-cds``, a MMseqs2 clustering TSV file, and a FoldSeek target database of the representative proteins.
 
-CAGEcleaner can process outputs from other gene mining tools than cblaster, although you need to wrangle your non-cblaster output into three TSV files with specific formatting (see also the example files). Using our provided helper tool ``cagecleaner-generate-session``, generate a new cblaster session file, which you can use as input for CAGEcleaner.
+Prior work
+~~~~~~~~~~
+**1.** Get structural models as CIF files of your query proteins, either experimentally or computationally (AlphaFold, ESMFold, OpenFold...). Collect them all in one folder ``query_models``.
 
-The **formatting of these three TSV files** is described below.
+**2.** Build a genomic context table using our provided helper tool ``cfoldseeker-cds``, which builds a context table directly from a set of NCBI or Bakta GFF files, or from a folder holding an extracted NCBI package of GFF files. *(See the prior work section of local search above)*
 
-***Don't forget the header line in each file!***
+**3.** Cluster your target sequences in the folder ``input_all`` using ``mmseqs``. You can do this using ``easy-cluster``, or ``easy-linclust`` for huge sequence databases. We recommend to use an identity and a coverage threshold of 90 % to ensure all proteins in a protein cluster have identical functions. Use other thresholds at your own risk!
 
-hits.tsv
-~~~~~~~~
+.. code-block:: bash
 
-====== ===================================================================================================================================================================
-Column Description
-====== ===================================================================================================================================================================
-db_id  ID of the homolog (e.g. an NCBI Protein ID, an arbitrary gene label from a Bakta annotation)
-query  ID of the matching query
-scaff  ID of the scaffold that harbours this homolog (e.g. an NCBI Nucleotide ID, a contig label of your own local genome assembly)
-strand strand location of the homolog
-coords start and end coordinates of the homolog on the scaffold, separated by two dots. For multiple exons, use the following formatting ``join(start1..end1,start2..end2)``.
-evalue a probabilistic value for the homolog
-score  a score for the homolog
-seqid  sequence identity of the homolog with its matching query
-tcov   target coverage of the homolog with its matching query
-====== ===================================================================================================================================================================
+	mmseqs easy-linclust input_all clustered tmp --min-seq-id 0.9 -c 0.9
 
-clusters.tsv
-~~~~~~~~~~~~
+This will, among others, produce a fasta file ``clustered_rep_seq.fasta`` containing the amino acid sequences of the representative protein of each cluster.
 
-========== ================================================================================================================================
-Column     Description
-========== ================================================================================================================================
-number     an arbitrary but unique number to identify each cluster
-hits       a comma-separated list of hit IDs (e.g. an NCBI Protein ID, an arbitrary gene label from a Bakta annotation)
-start      starting coordinate of the cluster on the scaffold
-end        ending coordinate of the cluster on the scaffold
-length     length of the cluster in bp
-score      a score for the cluster (e.g. the cblaster score)
-scaff      an ID of the scaffold that harbours this cluster (e.g. an NCBI Nucleotide ID, a contig label of your own local genome assembly)
-strand     strand location of the cluster
-taxon_name name of the organism (can be a human-readable name, or a NCBI Assembly ID)
-taxon_id   a taxon ID (e.g. the NCBI taxon ID, an arbitrary ID)
-========== ================================================================================================================================
+**4.** Generate the target DB from the representative sequences using FoldSeek and ProstT5 (see also the prior work section of local search above). Make sure you have downloaded ProstT5's weights.
 
-queries.tsv
-~~~~~~~~~~~
+.. code-block:: bash
 
-====== ======================================================
-Column Description
-====== ======================================================
-id     a label for the query
-start  a starting coordinate for the query (can be arbitrary)
-end    an ending coordinate for the query (can be arbitrary)
-====== ======================================================
+	foldseek createdb clustered_rep_seq.fasta target_DB --prostt5-model <path-to-prostt5-weights>
 
-Hit recovery
-------------
+The search
+~~~~~~~~~~
+Run ``cfoldseeker`` in local mode using FoldSeek DB ``target_DB``, context DB ``cds_db.gz``, and preclustering table ``clustered_table.tsv``. Save results in a new folder ``results``.
 
-The sequence diversity in genomes or genomic neighbourhoods does not always correlate well with the diversity in the gene clusters themselves, resulting some interesting clusters being discarded unnecessarily when not taking precautions. **CAGEcleaner automatically recovers cluster diversity** using the two strategies outlined below.
+.. code-block:: bash
 
-Cluster content
+	cfoldseeker -m local_clustered -q query_models -o results -ldb target_DB/target_DB -cdb cds_db.gz -scl clustered_table.tsv
+
+Specifying search options
+-------------------------
+``cfoldseeker`` offers several filtering thresholds to refine your hit set and find relevant gene clusters.
+
+General options
 ~~~~~~~~~~~~~~~
+The general search options are a mix of what ``cblaster`` and ``foldseek`` offer. These options are listed below.
 
-This strategy assesses the number of homologs that were found for each query gene.
++-------------------+------------------------------------------------------------+
+| **filter**        | **Description**                                            |
++-------------------+------------------------------------------------------------+
+| ``--max-eval``    | Maximum E-value of a Foldseek hit                          |
++-------------------+------------------------------------------------------------+
+| ``--min-score``   | Minimum bitscore of a Foldseek hit                         |
++-------------------+------------------------------------------------------------+
+| ``--min-seqid``   | Minimum sequence identity between a hit and a query (in %) |
++-------------------+------------------------------------------------------------+
+| ``--min-qcov``    | Minimum query coverage of the hit (in %)                   |
++-------------------+------------------------------------------------------------+
+| ``--min-tcov``    | Minimum target coverage of the hit (in %)                  |
++-------------------+------------------------------------------------------------+
+| ``--max-gap``     | Maximum gap between two hits on the same scaffold (in bp)  |
++-------------------+------------------------------------------------------------+
+| ``--max-length``  | Maximum length of a cluster (in bp)                        |
++-------------------+------------------------------------------------------------+
+| ``--min-hits``    | Minimum number of hits in a cluster                        |
++-------------------+------------------------------------------------------------+
+| ``--min-cov-qrs`` | Minimum number of queries represented in a cluster         |
++-------------------+------------------------------------------------------------+
+| ``--require``     | Queries that must have a hit in a cluster                  |
++-------------------+------------------------------------------------------------+
 
-For example, suppose you found two groups of hits. Group 1 has one gene A and one gene B, and contains the hit that was retained due to the dereplication. On the other hand, group 2 has two genes A and one gene B. If you would stick to the hit reduction after the dereplication, group 2 would not be represented anymore.
+Getting all cluster layouts
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Sometimes, a protein may match with multiple query proteins, e.g. when you have two paralogs among your query proteins. This makes it tricky to determine what the query layout of an identified cluster is. For example, if two proteins in a cluster both match with query proteins 1 and 2, cluster layout *12* is equally correct as layout *21*. By default, if ``cfoldseeker`` encounters the identical cluster passing the filtering thresholds with different layouts, it will only keep the one with the highest cluster score.
 
-In each content group not containing the dereplication representative hit, the hit to be retained is chosen randomly.
+If you are interested in all possible cluster layouts passing your filtering thresholds rather than only the highest-scoring one, you can turn on the ``all-layouts`` flag and keep all passing configurations.
 
-.. note::
+Using taxon filters
+~~~~~~~~~~~~~~~~~~~
+The Foldseek webserver offers an interface to filter hits by a taxonomic filter. ``cfoldseeker`` exposes this interface in its remote mode via the ``-tf`` or ``--taxon-filter`` flag. Foldseek expects NCBI taxon IDs for its taxonomic filter. If you are not sure what the exact taxon ID of your taxa group is, you can check it at `the NCBI Taxonomy website <https://www.ncbi.nlm.nih.gov/datasets/taxonomy/browser/>`_.
 
-   This recovery method may also recover redundant cluster hits of which a query homolog was missed by your mining tool, for example because of a too high e-value.
+Another option is to add as a taxonomic filter under *settings* on the Foldseek webserver. Click then the *API* button on the top right, which will give you a pop-up with code to submit your query via the terminal, including the taxonomy ID of your taxa group among the settings.
 
-Homology score
+Specifying outputs
+------------------
+``cfoldseeker`` can produce several outputs. By default, it produces only hit and cluster overview tables in TSV format, but several cblaster-style outputs and the raw Foldseek hit tables can be returned on request.
+
+Cluster table
+~~~~~~~~~~~~~
+The ``clusters.tsv`` file is a tab-separated file summarising the properties of the identified clusters. It comprises the 10 columns described below.
+
++-------------+------------------------------------------------------+
+| **Column**  | **Description**                                      |
++-------------+------------------------------------------------------+
+| number      | Arbitrary unique number                              |
++-------------+------------------------------------------------------+
+| hits        | IDs of the hits part of this cluster                 |
++-------------+------------------------------------------------------+
+| start       | Starting coordinate of the entire cluster            |
++-------------+------------------------------------------------------+
+| end         | End coordinate of the entire cluster                 |
++-------------+------------------------------------------------------+
+| length      | Sum of the lengths of all exons part of this cluster |
++-------------+------------------------------------------------------+
+| score       | Sum of the Foldseek bitscores of all cluster members |
++-------------+------------------------------------------------------+
+| scaff       | ID of the scaffold/contig harbouring this cluster    |
++-------------+------------------------------------------------------+
+| strand      | Strand location of the cluster                       |
++-------------+------------------------------------------------------+
+| taxon_name  | Name of the taxon (e.g. NCBI Assembly ID)            |
++-------------+------------------------------------------------------+
+| taxon_id    | Unique taxon ID (e.g. NCBI taxon ID)                 |
++-------------+------------------------------------------------------+
+
+Hit table
+~~~~~~~~~
+The ``hits.tsv`` file gathers metadata about all hits part of the identified clusters. It contains the 16 columns described below.
+
++-----------------+----------------------------------------------------------------------------+
+| **Column**      | **Description**                                                            |
++-----------------+----------------------------------------------------------------------------+
+| db_id           | Unique hit ID                                                              |
++-----------------+----------------------------------------------------------------------------+
+| query           | ID of the query with which the hit matches                                 |
++-----------------+----------------------------------------------------------------------------+
+| scaff           | ID of the scaffold/contig harbouring this hit                              |
++-----------------+----------------------------------------------------------------------------+
+| strand          | Strand location of the hit                                                 |
++-----------------+----------------------------------------------------------------------------+
+| coords          | Comma-separated list of coordinate intervals for all exons of this protein |
++-----------------+----------------------------------------------------------------------------+
+| db              | DB in which this hit was found (for local DBs: *local*)                    |
++-----------------+----------------------------------------------------------------------------+
+| crossref_id     | ID of the cross-referenced record (same as db_id for local DBs)            |
++-----------------+----------------------------------------------------------------------------+
+| crossref_method | Cross-referencing method (*KEGG*, *GenPept*, *WGS-GenPept*, or *local*)    |
++-----------------+----------------------------------------------------------------------------+
+| name            | Protein annotation                                                         |
++-----------------+----------------------------------------------------------------------------+
+| taxon_name      | Name of the taxon (e.g. NCBI Assembly ID)                                  |
++-----------------+----------------------------------------------------------------------------+
+| taxon_id        | Unique taxon ID (e.g. NCBI taxon ID)                                       |
++-----------------+----------------------------------------------------------------------------+
+| evalue          | Hit e-value                                                                |
++-----------------+----------------------------------------------------------------------------+
+| score           | Hit bitscore                                                               |
++-----------------+----------------------------------------------------------------------------+
+| seqid           | Sequence identity between hit and query protein                            |
++-----------------+----------------------------------------------------------------------------+
+| qcov            | Query coverage of the hit (which fraction of the query fits)               |
++-----------------+----------------------------------------------------------------------------+
+| tcov            | Target coverage of the hit (which fraction of the target fits)             |
++-----------------+----------------------------------------------------------------------------+
+
+Foldseek output
 ~~~~~~~~~~~~~~~
+``cfoldseeker`` can return the raw Foldseek output from which it started. This can be useful if you want to track down why a certain hit was not found being part of a cluster, or how many hits have been found for a certain query protein. In remote mode, ``cfoldseeker`` returns the json files it received from the Foldseek webserver. In the local modes, it will return the tab-separated text file returned by the local ``foldseek`` call.
 
-This strategy assesses the homology score of each hit.
-
-For example, suppose you found a group of gene clusters with similar gene contents. However, there is a cluster X that has evolved quite rapidly, or that has swapped one of its genes for a paralog. This shift translates in a more remote homology and thus a lower cblaster score. This diverging score is identified using outlier statistics and the hit is retained. If you would stick to the hit reduction after the dereplication, cluster X would have been lost.
-
-.. note::
-   
-   When recovery by cluster content is enabled, outliers are determined per content layout group.
-
-.. note::
-
-   By default, outliers scores are required to be sufficiently different from the mean score, implemented using an absolute score threshold. Without it, you may find an outlier with a score of 3.17 in a group of hundreds of hits with a score of 3.16.
-
-Example hit recovery
-~~~~~~~~~~~~~~~~~~~~
-
-Let's consider a (simplified) extended binary table output table where CAGEcleaner has added the representative, and the dereplication status for each row:
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org1     scaff1   3.17  1     1     1     org1           dereplication_representative
-org2     scaff2   3.16  1     1     1     org1           redundant
-org3     scaff3   3.17  1     0     1     org1           redundant
-org4     scaff4   3.17  1     1     1     org4           dereplication_representative
-org5     scaff5   2.92  1     0     1     org4           redundant
-org6     scaff6   3.12  1     0     1     org4           redundant
-org7     scaff7   3.16  1     1     1     org4           redundant
-org8     scaff8   3.14  1     0     1     org4           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
-
-The first step is to group the rows based on their corresponding representatives. In this case, there are two groups; org1 and org4. This will result in the following two tables:
-
-*REPRESENTATIVE = org1:*
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org1     scaff1   3.17  1     1     1     org1           dereplication_representative
-org2     scaff2   3.16  1     1     1     org1           redundant
-org3     scaff3   3.17  1     0     1     org1           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
-
-*REPRESENTATIVE = org4:*
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org4     scaff4   3.17  1     1     1     org4           dereplication_representative
-org5     scaff5   2.92  1     0     1     org4           redundant
-org6     scaff6   3.12  1     0     1     org4           redundant
-org7     scaff7   3.16  1     1     1     org4           redundant
-org8     scaff8   3.14  1     0     1     org4           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
-
-Now notice that the gene cluster composition varies within the groupings, something that might also occur in a real-life example. Some hits contain all the genes from the queries, whereas others are missing gene2. In the first grouping, org3 is missing gene2. If recovery by content is enabled, CAGEcleaner will make two groups and select a random representative for each group if it doesn't contain a dereplication representative. Hence, in this case, two hits are retained: org1 as representative for the structural group of org1 and org2, and org3 for its own structural group.
-
-*ALL GENES PRESENT:*
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org1     scaff1   3.17  1     1     1     org1           dereplication_representative
-org2     scaff2   3.16  1     1     1     org1           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
-
-*GENE2 MISSING:*
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org3     scaff3   3.17  1     0     1     org1           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
-
-Now let's consider the second grouping with org4 as dereplication representative and divide this table by gene cluster content:
-
-*ALL GENES PRESENT:*
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org4     scaff4   3.17  1     1     1     org4           dereplication_representative
-org7     scaff7   3.16  1     1     1     org4           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
-
-*GENE2 MISSING:*
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org5     scaff5   2.92  1     0     1     org4           redundant
-org6     scaff6   3.12  1     0     1     org4           redundant
-org8     scaff8   3.14  1     0     1     org4           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
-
-The grouping where all genes are present contains a representative, so no recovery is required. The other grouping contains hits where gene2 is missing. Notice that org5's cblaster score (2.92) significantly deviates from the scores in the rest of this grouping. If recovery by score is enabled, CAGEcleaner will retain this score outlier. Equivalent to the org1 case, a random non-outlier hit will be selected to represent this grouping if recovery by content is enabled (in this case org6).
-
-To summarise, the (simplified) binary table for this example case will look like below:
-
-======== ======== ===== ===== ===== ===== ============== ====================
-Organism Scaffold Score Gene1 Gene2 Gene3 Representative Dereplication status
-======== ======== ===== ===== ===== ===== ============== ====================
-org1     scaff1   3.17  1     1     1     org1           dereplication_representative
-org3     scaff3   3.17  1     0     1     org1           redundant
-org4     scaff4   3.17  1     1     1     org4           dereplication_representative
-org5     scaff5   2.92  1     0     1     org4           redundant
-org6     scaff6   3.12  1     0     1     org4           redundant
-======== ======== ===== ===== ===== ===== ============== ====================
+*cblaster* outputs
+~~~~~~~~~~~~~~~~
+``cfoldseeker`` has tightly integrated ``cblaster``. All results are cast into a cblaster session, from which familiar outputs can be obtained, such as the summary table, the binary table, the hit plot, and the clinker alignment. See `the cblaster documentation <https://cblaster.readthedocs.io/en/latest/guide/search_module.html#specifying-output>`_ for specifics on these outputs.
 
 

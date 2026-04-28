@@ -8,11 +8,11 @@ Installation
 Conda (recommended)
 -----------------------
 
-This is the recommended and most straightforward way to install CAGEcleaner. It should work on any Linux or MacOS system. Create a fresh conda environment as well to keep it from meddling with your other tools. You can install CAGEcleaner either directly from Bioconda
+This is the recommended and most straightforward way to install cfoldseeker. It should work on any Linux or MacOS system. Create a fresh conda environment as well to keep it from meddling with your other tools. It is directly installable from Bioconda
 
 .. code-block:: bash
 
-	conda create -n cagecleaner -c bioconda -c conda-forge cagecleaner
+	conda create -n cfoldseeker -c bioconda -c conda-forge cfoldseeker
 
 or by using the conda `yml` environment file in this repo.
 
@@ -24,22 +24,22 @@ Then start using it by activating the conda environment.
 
 .. code-block:: bash
 
-	conda activate cagecleaner
+	conda activate cfoldseeker
 
 Docker
 -------
 
-CAGEcleaner is also available as a Docker image from DockerHub. This is one of the recommended ways to run CAGEcleaner on Windows (the other one being running it using Windows' WSL feature).
+cfoldseeker is also available as a Docker image from DockerHub. This is one of the recommended ways to run cfoldseeker on Windows (the other one being running it using Windows' WSL feature).
 
 .. code-block:: bash
 
-	docker pull lucodevro/cagecleaner
+	docker pull lucodevro/cfoldseeker
 
-There is no entrypoint set up so running CAGEcleaner requires prepending your CAGEcleaner command with the appropriate Docker commands.
+There is no entrypoint set up so running cfoldseeker requires prepending your cfoldseeker command with the appropriate Docker commands.
 
 .. code-block:: bash
 
-	docker run lucodevro/cagecleaner -v <your-cblaster-session>:session.json -v <your-output-folder>:output cagecleaner -s session.json -o output
+	docker run lucodevro/cfoldseeker -v <some-input-file-or-folder>:<path-you-want-it-inside-the-container> cfoldseeker [-<flags>] [arguments]
 
 GitHub
 -------
@@ -53,14 +53,14 @@ Alternatively, it is possible to install the latest semi-stable development vers
 PyPi
 ------
 
-CAGEcleaner is also installable from PyPi using pip, yet we do not recommend using this approach as some dependencies are not available from PyPi (NCBI Datasets CLI, Entrez Direct, any2fasta, MMseqs2) and therefore should be installed beforehand. So either make sure you have installed these dependencies separately, or use one of the other installation options.
+cfoldseeker is also installable from PyPi using pip, yet we do not recommend using this approach as its core dependency FoldSeek is not available from PyPi, and therefore should be installed beforehand. So either make sure you have installed it separately, or use one of the other installation options.
 
 .. code-block:: bash
 
-	pip install cagecleaner
+	pip install cfoldseeker
 
 .. warning::
    
-   We do not recommend using this approach as some non-Python dependencies are not available from PyPi (NCBI Datasets CLI, any2fasta, MMseqs2) and therefore should be installed beforehand. Check out CAGEcleaner's dependencies in the Bioconda recipe for more details.
+   We do not recommend using this approach as key non-Python dependencies are not available from PyPi (FoldSeek) and therefore should be installed beforehand. Check out cfoldseeker's dependencies in the Bioconda recipe for more details.
 
 

@@ -1,106 +1,66 @@
-CAGEcleaner
+cfoldseeker
 ===================
 
 main
 -----------------------
 
-.. automodule:: cagecleaner.main
+.. automodule:: cfoldseeker.main
    :members:
    :undoc-members:
    :show-inheritance:
 
-run
+classes
 ----------------------
 
-.. automodule:: cagecleaner.run
+.. automodule:: cfoldseeker.classes
    :members:
    :undoc-members:
    :show-inheritance:
 
-genome\_run
+remote
 -----------
 
-.. automodule:: cagecleaner.genome_run
+.. automodule:: cfoldseeker.remote
    :members:
    :undoc-members:
    :show-inheritance:
 
-local\_genome\_run
+local
 -------------------
 
-.. automodule:: cagecleaner.local_genome_run
+.. automodule:: cfoldseeker.local
    :members:
    :undoc-members:
    :show-inheritance:
 
-local\_region\_run 
+local\_clustered 
 -------------------------------------
 
-.. automodule:: cagecleaner.local_region_run
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-local\_run
------------------------------
-
-.. automodule:: cagecleaner.local_run
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-region\_run
-------------------------------
-
-.. automodule:: cagecleaner.region_run
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-remote\_genome\_run
---------------------------------------
-
-.. automodule:: cagecleaner.remote_genome_run
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-remote\_region\_run
---------------------------------------
-
-.. automodule:: cagecleaner.remote_region_run
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-remote\_run
-------------------------------
-
-.. automodule:: cagecleaner.remote_run
+.. automodule:: cfoldseeker.local_clustered
    :members:
    :undoc-members:
    :show-inheritance:
 
 communication
--------------
+-----------------------------
 
-.. automodule:: cagecleaner.communication
+.. automodule:: cfoldseeker.communication
    :members:
    :undoc-members:
    :show-inheritance:
 
-file\_utils
-------------
+remote\_parsers
+------------------------------
 
-.. automodule:: cagecleaner.file_utils
+.. automodule:: cfoldseeker.remote_parsers
    :members:
    :undoc-members:
    :show-inheritance:
 
-utils
-------------------------
+build\_cds\_db
+--------------------------------------
 
-.. automodule:: cagecleaner.utils
+.. automodule:: cfoldseeker.build_cds_db
    :members:
    :undoc-members:
    :show-inheritance:
