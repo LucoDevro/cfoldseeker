@@ -114,60 +114,63 @@ def parse_arguments(args) -> dict:
     Returns:
         A dictionary holding the parsed and validated argument values.
         
+    Raises:
+        ValueError: if an invalid argument value was given.
+        
     Note:
         Also configures the logger.
     """
     ## Validate arguments
     try:
         if args.mode not in ['local', 'remote', 'local_clustered']:
-            raise argparse.ArgumentError('Invalid search mode. Possible choices: "local" and "remote".')
+            raise ValueError('Invalid search mode. Possible choices: "local" and "remote".')
         if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
-            raise argparse.ArgumentError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
+            raise ValueError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
         if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
-            raise argparse.ArgumentError('Query folder path does not exist or does not contain cif files.')
+            raise ValueError('Query folder path does not exist or does not contain cif files.')
         if not(args.cores > 0):
-            raise argparse.ArgumentError('Number of cores must be strictly positive.')
+            raise ValueError('Number of cores must be strictly positive.')
         if not(args.max_workers > 0): 
-            raise argparse.ArgumentError('Number of workers must be positive.')
+            raise ValueError('Number of workers must be positive.')
         if not(args.max_eval <= 1 and args.max_eval > 0): 
-            raise argparse.ArgumentError('Maximum e-value should be a number between 0 and 1.')
+            raise ValueError('Maximum e-value should be a number between 0 and 1.')
         if not(args.min_seqid >= 0 and args.min_seqid <= 100):
-            raise argparse.ArgumentError("Minimum sequence identity should be a percentage between 0 and 100.")
+            raise ValueError("Minimum sequence identity should be a percentage between 0 and 100.")
         if not(args.min_score >= 0):
-            raise argparse.ArgumentError("Minimum FoldSeek bitscore should be a positive number.")
+            raise ValueError("Minimum FoldSeek bitscore should be a positive number.")
         if not(args.min_qcov >= 0 and args.min_qcov <= 100):
-            raise argparse.ArgumentError("Minimum query coverage should be a percentage between 0 and 100.")
+            raise ValueError("Minimum query coverage should be a percentage between 0 and 100.")
         if not(args.min_tcov >= 0 and args.min_tcov <= 100):
-            raise argparse.ArgumentError("Minimum target coverage should be a percentage between 0 and 100.")
+            raise ValueError("Minimum target coverage should be a percentage between 0 and 100.")
         if not(args.max_gap >= 0): 
-            raise argparse.ArgumentError("Maximum intergenic gap should be a positive number.")
+            raise ValueError("Maximum intergenic gap should be a positive number.")
         if not(args.max_length >= 1): 
-            raise argparse.ArgumentError("Maximum cluster length should be strictly positive.")
+            raise ValueError("Maximum cluster length should be strictly positive.")
         if not(args.min_hits >= 1): 
-            raise argparse.ArgumentError("Minimum number of hits in a cluster should be strictly positive.")
+            raise ValueError("Minimum number of hits in a cluster should be strictly positive.")
         if not(args.min_cov_qrs >= 1): 
-            raise argparse.ArgumentError("Minimum number of covered queries in a cluster should be strictly positive.")
+            raise ValueError("Minimum number of covered queries in a cluster should be strictly positive.")
         if not(set(args.require) <= {f.stem for f in args.query_folder.glob('*cif')}):
-            raise argparse.ArgumentError("A required query cannot be found in your query folder. Please check the filenames.")
+            raise ValueError("A required query cannot be found in your query folder. Please check the filenames.")
         
         # Remote-specific checks
         match args.mode:
             case 'remote':
                 db = args.db
                 if not(args.mapping_table_path.is_file()):
-                    raise argparse.ArgumentError("UniProt mapping table path does not exist or is not a file.")
+                    raise ValueError("UniProt mapping table path does not exist or is not a file.")
             case 'local':
                 db = ["local"]
                 if not(args.local_db_path.is_file()):
-                    raise argparse.ArgumentError("Local FoldSeek DB does not exist.")
+                    raise ValueError("Local FoldSeek DB does not exist.")
                 if not(args.cds_db_path.is_file()):
-                    raise argparse.ArgumentError("CDS mapping table path does not exist or is not a file.")
+                    raise ValueError("CDS mapping table path does not exist or is not a file.")
             case 'local_clustered':
                 db = ['local']
                 if not(args.seq_clusters.is_file()):
-                    raise argparse.ArgumentError("MMseqs2 clustering table does not exist.")
+                    raise ValueError("MMseqs2 clustering table does not exist.")
                 
-    except argparse.ArgumentError as err:
+    except ValueError as err:
         LOG.critical(err)
         raise err
     
