@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cfoldseeker"
-version = "0.0.0"
+version = "0.0.1"
 description = "Find gene clusters via protein structure similarity"
 
 authors = [
@@ -30,7 +30,6 @@ dependencies = [
     "polars >=1.0.0",
     "networkx",
     "requests",
-    "fastexcel",
     "kegg-pull"
 ]
 
