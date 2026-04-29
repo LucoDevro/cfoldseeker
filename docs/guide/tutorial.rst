@@ -76,7 +76,7 @@ Together, these files may easily contain more than 40M protein sequences. So, to
 
 ``MMseqs2`` will produce three files: a fasta file with all sequences (`clustered_all_seqs.fasta`), one with only the representative sequences (`clustered_rep_seq.fasta`), and a clustering table in TSV format (`clustered_cluster.tsv`). The latter one is the one ``cfoldseeker`` will need later on, while the second one is the input for the protein model generation.
 
-.. note::
+.. tip::
 
    Although you can definitely run ``cfoldseeker`` against a set of protein structure models, it is currently computationally intractable to get full protein structures at the same scale as we do for sequences in the NCBI databases.
 
