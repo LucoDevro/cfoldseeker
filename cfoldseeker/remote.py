@@ -83,7 +83,7 @@ class RemoteSearch(Search):
         return f"Remote Search of {','.join(list(self.query.keys()))} in {self.params['db']} with {len(self.clusters)} clusters identified"
     
     
-    def _sanitise_hit_attr(hits: list[Hit], attr: str) -> list[Hit]:
+    def _sanitise_hit_attr(self, hits: list[Hit], attr: str) -> list[Hit]:
         """
         Sanitise the hit list for the provided attribute.
         
@@ -196,7 +196,7 @@ class RemoteSearch(Search):
         return None
     
     
-    def passes_criteria(self, hit: Hit, print_criteria):
+    def passes_criteria(self, hit: Hit):
         """
         Check if a hit passes the criteria set for this search.
         

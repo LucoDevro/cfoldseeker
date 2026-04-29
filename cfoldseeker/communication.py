@@ -12,28 +12,30 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 LOG = logging.getLogger(__name__)
 
 
-def submit_foldseek_query(query_path: Path, dbs: list, taxfilters: list) -> dict:
+def submit_foldseek_query(query_path: Path, dbs: list, taxfilters: list, max_attempts: int = 3) -> dict:
     """
     Submits a structure file to the FoldSeek API for processing.
     
     Sends a protein structure query to the FoldSeek webserver with specified
     databases and taxonomic filters. Returns the submission ticket on success
-    or raises an error on failure.
+    or raises an error on failure with maximum attempt logic.
     
     Args:
-        query_path: Path object pointing to the structure file to submit.
-        dbs: List of database names to search against.
-        taxfilters: List of taxonomic filters to apply to the search.
+        query_path (Path): Path object pointing to the structure file to submit.
+        dbs (list): List of database names to search against.
+        taxfilters (list): List of taxonomic filters to apply to the search.
+        max_attempts (int): Maximum number of submission attempts
     
     Returns:
         A dictionary containing the submission ticket and metadata from the
         FoldSeek API response.
         
     Raises:
-        RuntimeError: If submission fails.
+        RuntimeError: If submission fails too many times.
         
     """
     FOLDSEEK_SUBMISSION_URL = "https://search.foldseek.com/api/ticket"
+    trials = 0
     
     with open(query_path, "rb") as f:
         # Compose ticket
@@ -47,19 +49,31 @@ def submit_foldseek_query(query_path: Path, dbs: list, taxfilters: list) -> dict
         # Submit ticket
         LOG.debug(f"Posting request on FoldSeek webserver {FOLDSEEK_SUBMISSION_URL}")
         LOG.debug(f"using the following parameters: {data}")
-        response = requests.post(FOLDSEEK_SUBMISSION_URL, files=files, data=data)
         
-        # Checking server response
-        if response.status_code == 200:
-            LOG.debug(f'Query {query_path} successfully submitted!')
-            return response.json()
-        else:
-            msg = f"Error submitting query {query_path}! Status code: {response.status_code}"
-            LOG.critical(msg)
-            raise RuntimeError(msg)
+        while trials < max_attempts:
+            try:
+                response = requests.post(FOLDSEEK_SUBMISSION_URL, files=files, data=data)
+                match response.status_code:
+                    case 200:
+                        LOG.debug(f'Query {query_path} successfully submitted!')
+                        return response.json()
+                    case 429:
+                        LOG.warning('Too many requests error returned. Waiting 5 seconds before retrying.')
+                        trials += 1
+                        time.sleep(5)
+                    case _:
+                        msg = f"Error submitting query {query_path}! Status code: {response.status_code}"
+                        LOG.warning(msg)
+                        
+            except requests.exceptions.ConnectionError:
+                LOG.warning('Error submitting request. Connection was aborted.')
+                trials += 1
+                time.sleep(5)
+                
+        msg = 'Too many attempts submitting. Aborting.'
+        LOG.critical(msg)
+        raise RuntimeError(msg)
             
-    return None
-
 
 def check_query_status(job_id: str) -> str:
     """
@@ -108,6 +122,7 @@ def retrieve_foldseek_results(job_id: str) -> dict:
             results = requests.get(url).json()
             break
         else:
+            LOG.debug(f'Job status: {status}')
             LOG.debug(f"Job {job_id} has not completed yet. Waiting another 10 seconds...")
             time.sleep(10)
             
@@ -136,15 +151,29 @@ def pull_from_ena(entry: str, max_retries: int = 3) -> None | str:
     url = f"{ENA_BROWSER_URL}/{entry}"
     LOG.debug(f'Going to pull GenPept record from {url}')
     while trials < max_retries:
-        response = requests.get(url)
-        if response.status_code == 200:
-            return response.text
-        elif response.status_code == 429:
+        try:
+            response = requests.get(url)
+            match response.status_code:
+                case 200:
+                    return response.text
+                case 429:
+                    LOG.warning('Too many requests error returned. Waiting 5 seconds before retrying.')
+                    trials += 1
+                    time.sleep(5)
+                case 404:
+                    LOG.warning(f'Entry {entry} not found. Aborting.')
+                    return None
+                case _:
+                    LOG.warning(f'Error pulling GenPept entry {entry}. Code returned: {response.status_code}. Retrying.')
+                
+        except requests.exceptions.ConnectionError:
+            LOG.warning(f'Error pulling GenPept entry {entry}. Connection was aborted.')
             trials += 1
             time.sleep(5)
-        else:
-            LOG.warning(f'Error pulling GenPept entry {entry}, code returned: {response.status_code}')
-            return None
+    
+    LOG.warning('Too many attempts to download {entry}. Aborting.')
+    
+    return None
 
 
 def pull_from_unisave(entry: str, max_retries: int = 3) -> None | str:
@@ -169,15 +198,29 @@ def pull_from_unisave(entry: str, max_retries: int = 3) -> None | str:
     url = f"{UNISAVE_REST_URL}/{entry}?format=txt"
     LOG.debug(f'Going to pull UniSave entry from {url}')
     while trials < max_retries:
-        response = requests.get(url)
-        if response.status_code == 200:
-            return response.text
-        elif response.status_code == 429:
+        try:
+            response = requests.get(url)
+            match response.status_code:
+                case 200:
+                    return response.text
+                case 429:
+                    LOG.warning('Too many requests error returned. Waiting 5 seconds before retrying.')
+                    trials += 1
+                    time.sleep(5)
+                case 404:
+                    LOG.warning(f'Entry {entry} not found. Aborting.')
+                    return None
+                case _:
+                    LOG.warning(f'Error pulling UniSave record {entry}. Code returned: {response.status_code}. Retrying.')
+                    
+        except requests.exceptions.ConnectionError:
+            LOG.warning(f'Error pulling UniSave record {entry}. Connection was aborted.')
             trials += 1
             time.sleep(5)
-        else:
-            LOG.warning(f'Error pulling UniSave record {entry}, code returned: {response.status_code}')
-            return None
+            
+    LOG.warning(f'Too many attempts to download record {entry}. Aborting.')
+    
+    return None
 
 
 def pull_dict_from_unisave(entries: list, max_workers: int = 1, no_progress: bool = False) -> dict:
