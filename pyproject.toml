@@ -9,11 +9,9 @@ description = "Find gene clusters via protein structure similarity"
 
 authors = [
     {name = "Lucas De Vrieze", email = "lucas.devrieze@kuleuven.be"},
-	{name = "Miguel Biltjes", email = "miguel.biltjes@kuleuven.be"}
 ]
 maintainers = [
     {name = "Lucas De Vrieze", email = "lucas.devrieze@kuleuven.be"},
-	{name = "Miguel Biltjes", email = "miguel.biltjes@kuleuven.be"}
 ]
 
 classifiers = [
