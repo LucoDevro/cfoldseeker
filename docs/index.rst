@@ -16,15 +16,13 @@ cfoldseeker
 
 **The local mode** launches FoldSeek searches against a local structure database, and uses a genomic context database prepared from your sequences using its helper tool ``cfoldseeker-cds``.
 
-**The local-clustered** mode facilitates searches against huge structure databases by searching against a target database preclustered with ``mmseqs2``.
+**The local-clustered mode** facilitates searches against huge structure databases by searching against the representative proteins of a target database preclustered with ``mmseqs2``.
    
 If you find ``cfoldseeker`` useful, please cite:
 
 ::
 
-	De Vrieze, L., Biltjes, M., Lukashevich, S., Tsurumi, K., Masschelein, J. (2025).
-	CAGEcleaner: reducing genomic redundancy in gene cluster mining. Bioinformatics
-	https://doi.org/10.1093/bioinformatics/btaf373
+	In preparation
 
 
 .. toctree::

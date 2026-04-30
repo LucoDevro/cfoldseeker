@@ -7,9 +7,9 @@ Starting from a set of protein structures of interest, it searches protein struc
 
 ``cfoldseeker`` has several useful features:
 
-- **The remote mode** facilitates querying the AlphaFoldDB and fetching genomic contexts via various APIs in parallel (KEGG, UniProt, ENA GenPept).
-- **The local mode** allows querying a local protein structure database using a premade genomic context table constructed from GFF files or TSV files with ``cfoldseeker-cds``.
-- **The local_clustered** enables querying a database of representative protein structures generated from a preclustered sequence database, as a means to reduce the computational workload of the protein model generation. If the representative protein of a sequence cluster is picked up, all members of that sequence cluster are added to the hit set.
-- Tight integration with ``cblaster`` by handling its session files, allowing the use of existing processing and visualisation workflows such as ``clinker`` and ``CAGEcleaner``.
+- **The remote mode** facilitates searching against the AlphaFoldDB and fetching genomic contexts via various APIs in parallel (KEGG, UniProt, ENA GenPept).
+- **The local mode** allows searching against a local protein structure database using a premade genomic context table constructed from GFF files or TSV files with ``cfoldseeker-cds``.
+- **The local_clustered mode** enables searchinng against a database of representative protein structures from a preclustered sequence database, as a means to reduce the computational workload of the protein model generation. If the representative protein of a sequence cluster is picked up, all members of that sequence cluster are added to the hit set.
+- **Tight integration with ``cblaster``** by casting results into its session files, allowing the use of existing processing and visualisation workflows such as ``clinker`` and ``CAGEcleaner``.
 
 For detailed information on how to use the several modes and helper tools, and how to make it work in conjunction with other relevant tools, head over to the user guide and the tutorial.
