@@ -9,7 +9,7 @@
 ## Description
 `cfoldseeker` finds homologous gene clusters via protein structural similarity. It searches structural homologs for your query protein structures using `foldseek` (both local and remote target databases supported) and identifies the genomically colocalised hits among these by fetching the genomic location of each protein's coding sequence (fetched from various remote cross-referencing APIs, or from a locally prepared database).
 
-`cfoldseeker` has been designed as the structural similarity-driven sister tool of `cblaster`, which it tighly integrates for generating outputs. As such, `cfoldseeker` can naturally produce `cblaster`-style output and `clinker` visualisations.
+`cfoldseeker` has been designed as the structural similarity-driven sister tool of [`cblaster`](https://github.com/gamcil/cblaster), which it tighly integrates for generating outputs. As such, `cfoldseeker` can naturally produce `cblaster`-style output and `clinker` visualisations.
 
 > [!TIP]
 > Although `cfoldseeker` can be used as a stand-alone tool, it is the structural similarity-based discovery engine of the ✨ [`csuite`](https://github.com/LucoDevro/csuite) ✨, our new integrated toolbox featuring streamlined workflows for both sequence and protein structure-based gene cluster mining. Try it out!
