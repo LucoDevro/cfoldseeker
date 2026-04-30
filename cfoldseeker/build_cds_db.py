@@ -86,9 +86,9 @@ def parse_arguments() -> argparse.Namespace:
     return args
 
 
-def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl.DataFrame:
+def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl.LazyFrame:
     """
-    Parses a single NCBI GFF file into a Polars DataFrame.
+    Parses a single NCBI GFF file into a Polars LazyFrame.
     
     Extracts CDS features and their associated metadata from an NCBI-formatted GFF file,
     including taxonomic ID, gene tags, product names, genomic coordinates, and strand
@@ -101,7 +101,7 @@ def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> p
             structure). If False, uses file stem as filename. Defaults to False.
     
     Returns:
-        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
+        A Polars LazyFrame with columns: gene_tag, name, contig, coords, strand,
         taxon_id, and filename. Exons are aggregated into comma-separated coordinates.
         
     Note:
@@ -140,10 +140,10 @@ def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> p
     # Aggregate multiple CDSes (i.e. exons) in one record
     cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
     
-    return cds_record.collect()
+    return cds_record
 
 
-def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
+def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.LazyFrame:
     """
     Parses a single Bakta GFF file into a Polars DataFrame.
     
@@ -156,7 +156,7 @@ def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
             the generic taxon ID and Path is the file path to the GFF file.
     
     Returns:
-        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
+        A Polars LazyFrame with columns: gene_tag, name, contig, coords, strand,
         taxon_id, and filename. Exons are aggregated into comma-separated coordinates.
     """
     df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = False, comment_prefix = '#',
@@ -186,10 +186,10 @@ def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.DataFrame:
     # Aggregate multiple CDSes (i.e. exons) in one record
     cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
     
-    return cds_record.collect()
+    return cds_record
 
 
-def _parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
+def _parse_one_tsv(numbered_filepath: tuple) -> pl.LazyFrame:
     """
     Parses a single TSV file into a Polars DataFrame.
     
@@ -202,7 +202,7 @@ def _parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
             and Path is the file path to the TSV file.
     
     Returns:
-        A Polars DataFrame with columns: gene_tag, name, contig, coords, strand,
+        A Polars LazyFrame with columns: gene_tag, name, contig, coords, strand,
         taxon_id, taxon_name. Exons are aggregated into comma-separated coordinates.
     """
     # Envisioned header: ['gene_tag', 'name', 'contig', 'start', 'end', 'strand', 'taxon_id', 'taxon_name']
@@ -216,10 +216,10 @@ def _parse_one_tsv(numbered_filepath: tuple) -> pl.DataFrame:
     # Aggregate multiple CDSes (i.e. exons) in one record
     cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
     
-    return cds_record.collect()
+    return cds_record
 
 
-def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = False) -> pl.DataFrame:
+def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = False) -> pl.LazyFrame:
     """
     Parses all input files and constructs a draft CDS coordinates database.
     
@@ -237,7 +237,7 @@ def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_pro
             Defaults to False.
     
     Returns:
-        A Polars DataFrame containing concatenated CDS records from all input files
+        A Polars LazyFrame containing concatenated CDS records from all input files
         with columns: gene_tag, name, contig, coords, strand, taxon_id, and filename
         (or taxon_name for TSV formats).
     """
@@ -276,7 +276,7 @@ def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_pro
     return cds_db
 
 
-def check_duplicate_contigs(cds_db: pl.DataFrame, parsing_mode: str) -> pl.DataFrame:
+def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyFrame:
     """
     Check for and attempt to fix duplicate contig labels per taxon.
     
@@ -285,25 +285,32 @@ def check_duplicate_contigs(cds_db: pl.DataFrame, parsing_mode: str) -> pl.DataF
     unique. For other formats, exits with an error.
     
     Args:
-        cds_db (polars.DataFrame): A dataframe containing CDS records with 'contig',
+        cds_db (polars.LazyFrame): A dataframe containing CDS records with 'contig',
             'taxon_id', and 'gene_tag' columns.
         parsing_mode (str)): The format mode used for parsing ('bakta-gff', 'ncbi-gff',
             'ncbi-package', or 'tsv').
     
     Returns:
-        cds_db (polars.DataFrame): The input DataFrame with modified contig labels if a fix
+        cds_db (polars.LazyFrame): The input DataFrame with modified contig labels if a fix
             was applied (Bakta mode only).
             
     Mutates: 
-        cds_db (polars.DataFrame): The input DataFrame with modified contig labels if a fix
+        cds_db (polars.LazyFrame): The input DataFrame with modified contig labels if a fix
             was applied (Bakta mode only).
                 
     Raises:
         RuntimeError: If duplicate contigs are detected and cannot be fixed, or if
-            fix attempt fails.    
+            fix attempt fails.
+        
+    Note:
+        This function contains a potential local partial materialisation of the LazyFrame.
+        This triggers all files to be parsed.
     """
+    LOG.info('Checking for duplicate contig labels')
+    
     # Check that no contig label occurs in combination with multiple taxon IDs
-    contig_taxa_combs = cds_db.group_by(['contig']).agg(pl.col('taxon_id').unique())
+    contig_taxa_combs = cds_db.select(['contig', 'taxon_id']).group_by(['contig']).agg(pl.col('taxon_id').unique())
+    contig_taxa_combs = contig_taxa_combs.collect() # Local materialisation
     nb_contig_taxa_combs = contig_taxa_combs.with_columns(nb_combs = pl.col('taxon_id').list.len())
     multi_taxa_contig = nb_contig_taxa_combs['nb_combs'] > 1
     if multi_taxa_contig.any():
@@ -344,7 +351,7 @@ def check_duplicate_contigs(cds_db: pl.DataFrame, parsing_mode: str) -> pl.DataF
     return cds_db
 
 
-def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str, max_attempts: int = 3) -> pl.DataFrame:
+def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str, max_attempts: int = 3) -> pl.LazyFrame:
     """
     Set taxon labels as either scientific names or filenames.
     
@@ -354,7 +361,7 @@ def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str, ma
     For TSV files, preserves user-provided annotations.
     
     Args:
-        cds_db (polars DataFrame): Dataframe containing CDS records with 'taxon_id',
+        cds_db (polars LazyFrame): Dataframe containing CDS records with 'taxon_id',
             'filename', and optionally 'gene_tag' columns.
         use_taxa (bool): If True, uses scientific names (NCBI) or generates generic
             names (Bakta). If False, uses filenames as taxon labels.
@@ -364,23 +371,26 @@ def set_taxon_labels(cds_db: pl.DataFrame, use_taxa: bool, parsing_mode: str, ma
             using Entrez. Defaults to 3.
         
     Returns:
-        cds_db (polars.DataFrame): The input DataFrame with a new 'taxon_name' column and
+        cds_db (polars.LazyFrame): The input DataFrame with a new 'taxon_name' column and
             the 'filename' column removed.
             
     Mutates:
-        cds_db (polars.DataFrame): The input DataFrame with a new 'taxon_name' column and
+        cds_db (polars.LazyFrame): The input DataFrame with a new 'taxon_name' column and
             the 'filename' column removed.
             
     Note:
         This function removes the temporary column 'filename' if present, as it may
         have been introduced when parsing NCBI GFF files.
+        This function contains a potential local partial materialisation of the LazyFrame.
+        This triggers all files to be parsed.
     """
     # In case of NCBI files
     if 'ncbi' in parsing_mode:
         # Fetch all taxon names if requested
         if use_taxa:
             LOG.info('Fetching taxon names using NCBI Entrez')
-            all_taxon_ids = cds_db.select('taxon_id').unique().to_series().to_list()
+            all_taxon_ids = cds_db.select('taxon_id').unique()
+            all_taxon_ids = all_taxon_ids.collect().to_series().to_list() # Local materialisation
             for attempt in range(max_attempts):
                 try:
                     with Entrez.esummary(db = 'taxonomy', id = all_taxon_ids) as handle:
@@ -431,6 +441,10 @@ def main():
     and parses input files, validates contig uniqueness, assigns taxon labels,
     and writes the final CDS coordinates database to disk as a tab-separated file.
     Supports optional gzip compression.
+    
+    Note:
+        This workflow uses a lazy parsing method to limit RAM usage. This comes at
+        the cost of the files being parsed multiple times, which is slower.
     """
     # Process arguments
     args = parse_arguments()
@@ -457,7 +471,7 @@ def main():
     # Write results
     LOG.info('Writing DB to disk')
     cds_db = cds_db.select(['gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'taxon_name'])
-    cds_db.write_csv(output_path, separator = '\t', include_header = False, compression = gzip)
+    cds_db.sink_csv(output_path, separator = '\t', include_header = False, compression = gzip)
     
     
 if __name__ == "__main__":
