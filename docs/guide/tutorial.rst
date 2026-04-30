@@ -7,7 +7,7 @@ We will download GFF and protein Fasta files from NCBI, build a genomic context 
 
 .. note::
 
-   All tools mentioned in the tutorial below (except the NCBI Datasets CLI) are present in the ``cfoldseeker`` conda environment. You can just run everything inside this environment.
+   All tools mentioned in the tutorial below (except the NCBI Datasets CLI) are present in the ``cfoldseeker`` conda environment. You can just run this tutorial inside this environment.
 
 .. note::
 
@@ -68,7 +68,7 @@ To make my life easier, I collect all the protein fasta files in this NCBI packa
 	mkdir faas
 	dir -1 faa_package/ncbi_dataset/data | xargs -I % mv faa_package/ncbi_dataset/data/%/protein.faa faas/%.faa
 
-Together, these files may easily contain more than 40M protein sequences. So, to reduce later computational work spent generating protein models, we cluster them first using ``mmseqs easy-linclust`` at an identity and coverage threshold of 90 %. Using 32 cores on a HPC, this took about 15 minutes, resulting in 5.157.432 clusters, or **an eightfold reduction** in proteins for which we need to generate protein models! 
+Together, these files may easily contain more than 40M protein sequences. So, to reduce later computational work spent generating protein models, we cluster them first using ``mmseqs easy-linclust`` at an identity and coverage threshold of 90 %. Using 32 cores on a HPC, this took about 15 minutes, resulting in 5.157.432 clusters. We only need to generate protein models for **one eighth** of all proteins! 
 
 .. code-block:: bash
 
@@ -97,7 +97,7 @@ Then start generating 3Di encodings using GPU acceleration.
 	mkdir DB	
 	foldseek createdb clustered_rep_seq.fasta DB/Bacillaceae --gpu 1 --prostt5-model weights/
 
-Using two NVIDIA H200 GPUs (Hopper generation) on an HPC, this took xx hours.
+Using two NVIDIA H200 GPUs (Hopper generation) on an HPC, this took 19 hours.
 
 .. warning::
 
@@ -112,7 +112,9 @@ Running ``cfoldseeker``
 
 We now have all prerequisites to run ``cfoldseeker`` in local-clustered mode.
 
-The following command runs ``cfoldseeker`` at default search settings using 14 cores, and makes it produce every supported output file in the new folder `cfoldseeker_search`. By appending a ``tee`` pipe, you can capture the logs in a log file.
+The following command runs ``cfoldseeker`` at more relaxed search settings using 14 cores, requiring the YcaO protein, and makes it produce every supported output file in the new folder `cfoldseeker_search`. By appending a ``tee`` pipe, you can capture the logs in a log file.
+
+This should return 3446 identified clusters.
 
 .. code-block:: bash
 
@@ -124,6 +126,8 @@ The following command runs ``cfoldseeker`` at default search settings using 14 c
 	-ldb DB/Bacillaceae \
 	-cdb bacillaceae_cds.gz \
 	-scl clustered_cluster.tsv \
+	--max-eval 1e-3 \
+	--require WP_020634196.1 \
 	--session --summary --binary --plot --clinker --foldseek | \
 	tee cfoldseeker.log 
 
