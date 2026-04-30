@@ -20,7 +20,7 @@
 
 - **A remote search mode** for searches against the AlphaFoldDB, leveraging the [Foldseek webserver](https://search.foldseek.com) and various cross-referencing APIs for fetching genomic locations ([`kegg_pull`](https://github.com/MoseleyBioinformaticsLab/kegg_pull), [UniProt ID mapping](https://www.uniprot.org/id-mapping), [ENA Browser API](https://www.ebi.ac.uk/ena/browser/api/)).
 - **A local search mode** for searches against a local protein structure DB prepared with [`foldseek`](https://github.com/steineggerlab/foldseek).
-- **A local-clustered search mode** for searches against a local `foldseek` DB of representative proteins derived from a sequence set preclustered with [`MMseqs2`](https://github.com/soedinglab/MMseqs2)). If the representative protein of a sequence cluster is identified as a homolog, all cluster members are added to the hit set.
+- **A local-clustered search mode** for searches against a local `foldseek` DB of representative proteins derived from a sequence set preclustered with [`MMseqs2`](https://github.com/soedinglab/MMseqs2). If the representative protein of a sequence cluster is identified as a homolog, all other members are added to the hit set.
 - **A helper tool** to construct local genomic context databases: `cfoldseeker-cds`
 - **Tight integration with `cblaster`**, facilitating similar output and interactive `clinker` visualisations
 
