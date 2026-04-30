@@ -36,7 +36,7 @@ def parse_arguments() -> argparse.Namespace:
         prog = 'cfoldseeker-cds',
                 epilog = 
                 """
-                Lucas De Vrieze, Miguel Biltjes
+                Lucas De Vrieze
                 (c) 2026 Masschelein lab, VIB
                 """,
                 formatter_class = argparse.RawDescriptionHelpFormatter,
