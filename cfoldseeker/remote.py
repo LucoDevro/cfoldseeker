@@ -46,7 +46,7 @@ class RemoteSearch(Search):
     """
     
     def __init__(self, query, mapping_table_path, params = {}, hits = [], clusters = [], 
-                 output_folder = Path('.'), temp_folder = Path('.')):
+                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.')):
         """
         Initialise a RemoteSearch instance.
         
@@ -61,6 +61,7 @@ class RemoteSearch(Search):
                 Defaults to an empty dictionary.
             hits: List of Hit objects from previous searches. Defaults to empty list.
             clusters: List of identified gene clusters. Defaults to empty list.
+            output_flags (dict, optional): Output parameters dictionary. Defaults to {}.
             output_folder: Path object for final output directory. Defaults to current
                 directory ('.').
             temp_folder: Path object for temporary file directory. Defaults to current

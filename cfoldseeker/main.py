@@ -7,8 +7,6 @@ import shutil
 import logging
 import tempfile
 from pathlib import Path
-from cblaster.plot import plot_session
-from cblaster.plot_clusters import plot_clusters
 from importlib.metadata import version
 
 from cfoldseeker.remote import RemoteSearch
@@ -21,15 +19,15 @@ __version__ = version("cfoldseeker")
 LOG = logging.getLogger(__name__)
 
 
-def get_arguments() -> argparse.Namespace:
+def create_parser() -> argparse.ArgumentParser:
     """
-    This function collects the arguments given through the command line.
+    This function creates a parser object that will collect the arguments given through the command line.
     
     Args:
         None
     
     Returns:
-        A Namespace object holding the parsed arguments
+        parser (argparse.ArgumentParser): An ArgumentParser object holding the CLI ready to collect the arguments when called
     """
     
     parser = argparse.ArgumentParser(
@@ -59,7 +57,7 @@ def get_arguments() -> argparse.Namespace:
     args_io = parser.add_argument_group('Inputs and outputs')
     args_io.add_argument('-q', '--query', dest = 'query_folder', required = True, type = Path, help = "Path of the folder containing the query proteins.")
     args_io.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('.'), help = "Output directory (default: current location)")
-    args_io.add_argument('-t', '--temp', dest = "temp", type = Path, default = tempfile.gettempdir(), help = "Path to store temporary files (default: your OS's default temporary directory).")
+    args_io.add_argument('-t', '--temp', dest = "temp", type = Path, default = Path(tempfile.gettempdir()), help = "Path to store temporary files (default: your OS's default temporary directory).")
     args_io.add_argument('--no-tables', dest = 'output_tables', default = True, action = 'store_false', help = "Don't write overview tables (default: false).")
     args_io.add_argument('--session', dest = 'output_session', default = False, action = 'store_true', help = "Write cblaster session file (default: false).")
     args_io.add_argument('--summary', dest = 'output_summary', default = False, action = 'store_true', help = "Write cblaster summary file (default: false).")
@@ -96,85 +94,26 @@ def get_arguments() -> argparse.Namespace:
     args_local.add_argument('-cdb', '--cds-coords-db', dest = 'cds_db_path', type = Path, default = Path('local_cds_db.gz'), help = "Path of the CDS coordinates DB (default: local_cds_db.gz).")
     
     args_local_clustered = parser.add_argument_group('Local-clustered-specific search options')
-    args_local_clustered.add_argument('-scl', '--seq-clusters', dest = "seq_clusters", type = Path, default = Path('clu.tsv'),
-                                      help = "Path to MMseqs2 clustering table TSV file (default: clu.tsv).")
+    args_local_clustered.add_argument('-scl', '--seq-clusters', dest = "seq_clusters", type = Path, default = Path('cluster_clustered.tsv'),
+                                      help = "Path to MMseqs2 clustering table TSV file (default: cluster_clustered.tsv).")
     
-    args = parser.parse_args()
-    
-    return args
+    return parser
 
 
-def parse_arguments(args) -> dict:
+def setup_logging(verbosity: int) -> None:
     """
-    This function parses the arguments given through the command line.
+    Set up the root logger if it has not been set up yet.
     
     Args:
-        None
-    
+        verbosity (int): Verbosity level (choices: 0,1,2,3,4).
+        
     Returns:
-        A dictionary holding the parsed and validated argument values.
-        
-    Raises:
-        ValueError: if an invalid argument value was given.
-        
-    Note:
-        Also configures the logger.
+        None
     """
-    ## Validate arguments
-    try:
-        if args.mode not in ['local', 'remote', 'local_clustered']:
-            raise ValueError('Invalid search mode. Possible choices: "local" and "remote".')
-        if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
-            raise ValueError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
-        if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
-            raise ValueError('Query folder path does not exist or does not contain cif files.')
-        if not(args.cores > 0):
-            raise ValueError('Number of cores must be strictly positive.')
-        if not(args.max_workers > 0): 
-            raise ValueError('Number of workers must be positive.')
-        if not(args.max_eval <= 1 and args.max_eval > 0): 
-            raise ValueError('Maximum e-value should be a number between 0 and 1.')
-        if not(args.min_seqid >= 0 and args.min_seqid <= 100):
-            raise ValueError("Minimum sequence identity should be a percentage between 0 and 100.")
-        if not(args.min_score >= 0):
-            raise ValueError("Minimum FoldSeek bitscore should be a positive number.")
-        if not(args.min_qcov >= 0 and args.min_qcov <= 100):
-            raise ValueError("Minimum query coverage should be a percentage between 0 and 100.")
-        if not(args.min_tcov >= 0 and args.min_tcov <= 100):
-            raise ValueError("Minimum target coverage should be a percentage between 0 and 100.")
-        if not(args.max_gap >= 0): 
-            raise ValueError("Maximum intergenic gap should be a positive number.")
-        if not(args.max_length >= 1): 
-            raise ValueError("Maximum cluster length should be strictly positive.")
-        if not(args.min_hits >= 1): 
-            raise ValueError("Minimum number of hits in a cluster should be strictly positive.")
-        if not(args.min_cov_qrs >= 1): 
-            raise ValueError("Minimum number of covered queries in a cluster should be strictly positive.")
-        if not(set(args.require) <= {f.stem for f in args.query_folder.glob('*cif')}):
-            raise ValueError("A required query cannot be found in your query folder. Please check the filenames.")
-        
-        # Remote-specific checks
-        match args.mode:
-            case 'remote':
-                db = args.db
-                if not(args.mapping_table_path.is_file()):
-                    raise ValueError("UniProt mapping table path does not exist or is not a file.")
-            case 'local':
-                db = ["local"]
-                if not(args.local_db_path.is_file()):
-                    raise ValueError("Local FoldSeek DB does not exist.")
-                if not(args.cds_db_path.is_file()):
-                    raise ValueError("CDS mapping table path does not exist or is not a file.")
-            case 'local_clustered':
-                db = ['local']
-                if not(args.seq_clusters.is_file()):
-                    raise ValueError("MMseqs2 clustering table does not exist.")
-                
-    except ValueError as err:
-        LOG.critical(err)
-        raise err
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return None
     
-    ## Configure the logger
     log_levels = {0: logging.CRITICAL,
                   1: logging.ERROR,
                   2: logging.WARNING,
@@ -182,11 +121,84 @@ def parse_arguments(args) -> dict:
                   4: logging.DEBUG
                   }
     logging.basicConfig(
-        level = log_levels[args.verbosity],
+        level = log_levels[verbosity],
         format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
         datefmt="%H:%M:%S",
         handlers = [logging.StreamHandler(sys.stdout)]
         )
+    
+    return None
+
+
+def parse_and_validate_arguments(args: argparse.Namespace, skip_csuite_IO_checks: bool = False) -> dict:
+    """
+    This function validates the parsed arguments given through the command line.
+    
+    Args:
+        parser (argparse.NameSpace): A NameSpace object with parsed CLI arguments
+        skip_csuite_IO_checks (bool): Skip argument validation for intermediary inputs and outputs
+            in the csuite workflows. For compatibility with the csuite validation checker.
+    
+    Returns:
+        parsed_args (dict): A dictionary holding the parsed and validated argument values.
+        
+    Raises:
+        ValueError: if an invalid argument value was given.
+    """
+    ## Validate arguments
+    if args.mode not in ['local', 'remote', 'local_clustered']:
+        raise ValueError('Invalid search mode. Possible choices: "local" and "remote".')
+    if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
+        raise ValueError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
+    if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
+        raise ValueError('Query folder path does not exist or does not contain cif files.')
+    if not(args.cores > 0):
+        raise ValueError('Number of cores must be strictly positive.')
+    if not(args.max_workers > 0): 
+        raise ValueError('Number of workers must be positive.')
+    if not(args.max_eval <= 1 and args.max_eval > 0): 
+        raise ValueError('Maximum e-value should be a number between 0 and 1.')
+    if not(args.min_seqid >= 0 and args.min_seqid <= 100):
+        raise ValueError("Minimum sequence identity should be a percentage between 0 and 100.")
+    if not(args.min_score >= 0):
+        raise ValueError("Minimum FoldSeek bitscore should be a positive number.")
+    if not(args.min_qcov >= 0 and args.min_qcov <= 100):
+        raise ValueError("Minimum query coverage should be a percentage between 0 and 100.")
+    if not(args.min_tcov >= 0 and args.min_tcov <= 100):
+        raise ValueError("Minimum target coverage should be a percentage between 0 and 100.")
+    if not(args.max_gap >= 0): 
+        raise ValueError("Maximum intergenic gap should be a positive number.")
+    if not(args.max_length >= 1): 
+        raise ValueError("Maximum cluster length should be strictly positive.")
+    if not(args.min_hits >= 1): 
+        raise ValueError("Minimum number of hits in a cluster should be strictly positive.")
+    if not(args.min_cov_qrs >= 1): 
+        raise ValueError("Minimum number of covered queries in a cluster should be strictly positive.")
+    if not(set(args.require) <= {f.stem for f in args.query_folder.glob('*cif')}):
+        raise ValueError("A required query cannot be found in your query folder. Please check the filenames.")
+    
+    # Mode-specific checks
+    match args.mode:
+        case 'remote':
+            db = args.db
+            if not(args.mapping_table_path.is_file()):
+                raise ValueError("UniProt mapping table path does not exist or is not a file.")
+        case 'local':
+            db = ["local"]
+            if not(args.local_db_path.is_file()):
+                raise ValueError("Local FoldSeek DB does not exist.")
+            if not skip_csuite_IO_checks:
+                if not(args.cds_db_path.is_file()):
+                    raise ValueError("CDS mapping table path does not exist or is not a file.")
+        case 'local_clustered':
+            db = ['local']
+            if not(args.local_db_path.is_file()):
+                raise ValueError("Local FoldSeek DB does not exist.")
+            if not(args.seq_clusters.is_file()):
+                raise ValueError("MMseqs2 clustering table does not exist.")
+            if not skip_csuite_IO_checks:
+                if not(args.cds_db_path.is_file()):
+                    raise ValueError("CDS mapping table path does not exist or is not a file.")
     
     ## Parse the arguments
     # Search parameters
@@ -230,7 +242,7 @@ def parse_arguments(args) -> dict:
             LOG.error(msg)
             raise err
             
-    if str(paths['temp_folder']) != tempfile.gettempdir():
+    if paths['temp_folder'] != Path(tempfile.gettempdir()):
         try:
             paths['temp_folder'].mkdir(parents = True)
         except FileExistsError as err:
@@ -259,14 +271,18 @@ def parse_arguments(args) -> dict:
                    }
     
     return parsed_args
-    
 
-def main():
-    # First we parse the arguments:
-    args = get_arguments()
-    parsed_args = parse_arguments(args)
+
+def init_search(parsed_args):
+    """
+    Initialise the correct search class and pass it on the necessary arguments.
     
-    # Then we initiate the right workflow
+    Args:
+        parsed_args (dict): nested dictionary holding the arguments as parsed by parse_and_validate_arguments
+        
+    Returns:
+        the_run (RemoteSearch | LocalSearch | LocalClusteredSearch): A Search workflow object ready to run
+    """
     match parsed_args['params']['mode']:
         case 'remote':
             LOG.info("Launching cfoldseeker in remote mode")
@@ -274,7 +290,8 @@ def main():
                                    mapping_table_path = parsed_args['paths']['uniprot_mapping'],
                                    params = parsed_args['params'],
                                    output_folder = parsed_args['paths']['output_folder'],
-                                   temp_folder = parsed_args['paths']['temp_folder']
+                                   temp_folder = parsed_args['paths']['temp_folder'],
+                                   output_flags = parsed_args['output_flags'],
                                    )
         case 'local':
             LOG.info("Launching cfoldseeker in local mode")
@@ -283,7 +300,8 @@ def main():
                                   coord_db_path = parsed_args['paths']['cds_db_path'],
                                   params = parsed_args['params'],
                                   output_folder = parsed_args['paths']['output_folder'],
-                                  temp_folder = parsed_args['paths']['temp_folder']
+                                  temp_folder = parsed_args['paths']['temp_folder'],
+                                  output_flags = parsed_args['output_flags'],
                                   )
         case 'local_clustered':
             LOG.info("Launching cfoldseeker in local-clustered mode")
@@ -293,69 +311,58 @@ def main():
                                            params = parsed_args['params'],
                                            output_folder = parsed_args['paths']['output_folder'],
                                            temp_folder = parsed_args['paths']['temp_folder'],
-                                           seq_clust_tsv = parsed_args['paths']['seq_clusters']
+                                           seq_clust_tsv = parsed_args['paths']['seq_clusters'],
+                                           output_flags = parsed_args['output_flags'],
                                            )
-            
+    
+    return the_run
+
+
+def run_workflow(parsed_args: dict) -> None:
+    """
+    Execute the complete cfoldseeker workflow.
+    
+    Initialises the appropriate Run instance, executes it, generates the output,
+    and cleans up the temporary files.
+    
+    Returns:
+        None
+    """
+    # Instantiate the right workflow type
+    the_run = init_search(parsed_args)
+    
     # Run the workflow    
     LOG.info("STARTING SEARCH")
     the_run.run()
     
     # Generate requested output
-    if any([args.output_binary, args.output_clinker, args.output_plot, args.output_summary, args.output_session]):
-        LOG.info("Generating cblaster session")
-        cblaster_session = the_run.generate_cblaster_session()
-        
-        if args.output_session:
-            LOG.info("Writing cblaster session file")
-            path = the_run.OUTPUT_DIR / "session.json"
-            with open(path, "w") as handle:
-                cblaster_session.to_json(fp = handle)
-            LOG.debug(f'cblaster session file written at {str(path)}')
-        
-        if args.output_summary:
-            LOG.info("Writing cblaster summary file")
-            path = the_run.OUTPUT_DIR / 'summary.txt'
-            with open(path, 'w') as handle:
-                cblaster_session.format(form = "summary", fp = handle)
-            LOG.debug(f'cblaster summary file written at {str(path)}')
-            
-        if args.output_binary:
-            LOG.info("Writing cblaster binary table")
-            path = the_run.OUTPUT_DIR / 'binary.txt'
-            with open(path, 'w') as handle:
-                cblaster_session.format(form = "binary", fp = handle, delimiter = "\t")
-            LOG.debug(f'cblaster binary table written at {str(path)}')
-        
-        if args.output_plot:
-            LOG.info("Writing cblaster plot")
-            path = the_run.OUTPUT_DIR / 'plot.html'
-            plot_session(cblaster_session, output = path)
-            LOG.debug(f'cblaster plot written at {str(path)}')
-        
-        if args.output_clinker:
-            LOG.info("Writing clinker plot")
-            path = the_run.OUTPUT_DIR / "clinker.html"
-            with open(the_run.TEMP_DIR / "session.json", "w") as handle:
-                cblaster_session.to_json(fp = handle)
-            plot_clusters(the_run.TEMP_DIR / "session.json", plot_outfile = path, max_clusters = 10**6)
-            LOG.debug(f'clinker plot written at {str(path)}')
-        
-    if args.output_foldseek:
-        LOG.info("Copying FoldSeek output")
-        for file in the_run.TEMP_DIR.glob('foldseek_result*'):
-            shutil.copy(file, the_run.OUTPUT_DIR / file.name)
-        LOG.debug(f'FoldSeek output copied to {the_run.OUTPUT_DIR}')
-    
-    if args.output_tables:
-        LOG.info("Writing output tables")
-        the_run.generate_tables(the_run.OUTPUT_DIR)
-        LOG.debug(f'Output tables written to {the_run.OUTPUT_DIR}')
+    the_run.generate_output()
     
     # Clean up temporary directory
     LOG.info("Cleaning up temporary files")
     shutil.rmtree(the_run.TEMP_DIR)
     LOG.debug("Temporary files have been removed")
     
+    return None
+
+
+def main():
+    """
+    Main entry point of cfoldseeker.
+    
+    Oversees the complete workflow: parses command-line arguments, sets up the
+    logger and the run, and calls the workflow.
+    """
+    # First we parse and validate the arguments:
+    parser = create_parser()
+    args = parser.parse_args()
+    parsed_args = parse_and_validate_arguments(args)
+    
+    # Configure the logger
+    setup_logging(args.verbosity)
+    
+    # Set up and run the appropriate workflow
+    run_workflow(parsed_args)
     
     LOG.info('DONE!')
 

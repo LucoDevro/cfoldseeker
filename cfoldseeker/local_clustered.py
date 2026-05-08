@@ -16,9 +16,38 @@ LOG = logging.getLogger(__name__)
 class LocalClusteredSearch(LocalSearch):
     
     def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
-                 output_folder = Path('.'), temp_folder = Path('.'), seq_clust_tsv = Path('.')):
+                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.'),
+                 seq_clust_tsv = Path('.')):
+        """
+        Initialise a LocalClusteredSearch instance with database paths and parameters.
+        
+        Calls the parent LocalSearch class constructor and loads the CDS coordinates
+        database from a TSV file.
+        
+        Args:
+            query: A dictionary of query protein structures and their filepaths (inherited from Search).
+            db_path: Path to the local FoldSeek protein structure target database.
+            coord_db_path: Path to the CDS coordinates database file (tab-separated,
+                no header).
+            params: Dictionary of search parameters (e.g., min_seqid, max_eval,
+                min_score). Defaults to empty dict.
+            hits: List of Hit objects from previous searches. Defaults to empty list.
+            clusters: List of gene clusters from previous analysis. Defaults to
+                empty list.
+            output_flags (dict, optional): Output parameters dictionary. Defaults to {}.
+            output_folder: Path to folder for output files. Defaults to current
+                directory.
+            temp_folder: Path to folder for temporary files. Defaults to current
+                directory.
+            seq_clust_tsv: Path to the MMseqs2 clustering table. Defaults to current
+                directory.
+                
+        Note:
+            The coord_db and the seq_clust are loaded as LazyFrames for memory efficiency when dealing
+            with large databases.
+        """
            
-        super().__init__(query, db_path, coord_db_path, params, hits, clusters,
+        super().__init__(query, db_path, coord_db_path, params, hits, clusters, output_flags,
                          output_folder, temp_folder)
            
         self.seq_clust = pl.scan_csv(seq_clust_tsv, has_header = False, separator = "\t",

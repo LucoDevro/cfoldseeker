@@ -61,7 +61,7 @@ class LocalSearch(Search):
             taxon_name.
     """
     def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
-                 output_folder = Path('.'), temp_folder = Path('.')):
+                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.')):
         """
         Initialise a LocalSearch instance with database paths and parameters.
         
@@ -78,6 +78,7 @@ class LocalSearch(Search):
             hits: List of Hit objects from previous searches. Defaults to empty list.
             clusters: List of gene clusters from previous analysis. Defaults to
                 empty list.
+            output_flags (dict, optional): Output parameters dictionary. Defaults to {}.
             output_folder: Path to folder for output files. Defaults to current
                 directory.
             temp_folder: Path to folder for temporary files. Defaults to current
@@ -87,7 +88,7 @@ class LocalSearch(Search):
             The coord_db is loaded as a LazyFrame for memory efficiency when dealing
             with large databases.
         """
-        super().__init__(query, params, hits, clusters, output_folder, temp_folder)
+        super().__init__(query, params, hits, clusters, output_flags, output_folder, temp_folder)
         
         self.db_path: Path = db_path
         

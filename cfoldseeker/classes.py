@@ -4,12 +4,15 @@
 import operator
 import itertools as it
 import logging
+import shutil
 import polars as pl
 import networkx as nx
 from abc import ABC, abstractmethod
 from pathlib import Path
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from cblaster.classes import Session
+from cblaster.plot import plot_session
+from cblaster.plot_clusters import plot_clusters
 
 
 LOG = logging.getLogger(__name__)
@@ -321,11 +324,12 @@ class Search(ABC):
         params (dict): Search configuration parameters (e.g., max gap, min hits).
         hits (list[Hit]): All identified hits from the search.
         clusters (list[Cluster]): Identified gene clusters passing filters.
+        output_flags (dict): Outputs to be generated.
         OUTPUT_DIR (Path): Directory for output files.
         TEMP_DIR (Path): Directory for temporary files.
     """
-    def __init__(self, query, params = {}, hits = [], clusters = [], 
-                output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, params = {}, hits = [], clusters = [], output_flags = {},
+                 output_folder = Path('.'), temp_folder = Path('.')):
         """
         Initialise a Search object.
         
@@ -334,6 +338,7 @@ class Search(ABC):
             params (dict, optional): Search parameters dictionary. Defaults to {}.
             hits (list, optional): Pre-loaded Hit objects. Defaults to [].
             clusters (list, optional): Pre-loaded Cluster objects. Defaults to [].
+            output_flags (dict, optional): Output parameters dictionary. Defaults to {}.
             output_folder (Path, optional): Output directory path. Defaults to '.'.
             temp_folder (Path, optional): Temporary directory path. Defaults to '.'.
         """
@@ -341,6 +346,7 @@ class Search(ABC):
         self.params: dict = params # dictionary containing the search configuration
         self.hits: list = hits # list of Hit objects
         self.clusters: list = clusters # list of Cluster objects
+        self.output_flags: dict = output_flags # dictionary flagging the output files to be generated
         
         self.OUTPUT_DIR: Path = output_folder
         self.TEMP_DIR: Path = temp_folder
@@ -792,5 +798,71 @@ class Search(ABC):
         session = Session.from_dict(session_dict)
         
         return session
+    
+    
+    def generate_output(self):
+        """
+        Generate the requested output files for this search.
+        
+        Checks which outputs are requested from the parsed output flags,
+        and generates what is necessary using the appropriate methods.
+        
+        Args:
+            None
+            
+        Returns:
+            None
+        """
+        if any(map(self.output_flags.get, ['binary', 'clinker', 'plot', 'summary', 'session'])):
+            LOG.info("Generating cblaster session")
+            cblaster_session = self.generate_cblaster_session()
+            
+            if self.output_flags['session']:
+                LOG.info("Writing cblaster session file")
+                path = self.OUTPUT_DIR / "session.json"
+                with open(path, "w") as handle:
+                    cblaster_session.to_json(fp = handle)
+                LOG.debug(f'cblaster session file written at {str(path)}')
+            
+            if self.output_flags['summary']:
+                LOG.info("Writing cblaster summary file")
+                path = self.OUTPUT_DIR / 'summary.txt'
+                with open(path, 'w') as handle:
+                    cblaster_session.format(form = "summary", fp = handle)
+                LOG.debug(f'cblaster summary file written at {str(path)}')
+                
+            if self.output_flags['binary']:
+                LOG.info("Writing cblaster binary table")
+                path = self.OUTPUT_DIR / 'binary.txt'
+                with open(path, 'w') as handle:
+                    cblaster_session.format(form = "binary", fp = handle, delimiter = "\t")
+                LOG.debug(f'cblaster binary table written at {str(path)}')
+            
+            if self.output_flags['plot']:
+                LOG.info("Writing cblaster plot")
+                path = self.OUTPUT_DIR / 'plot.html'
+                plot_session(cblaster_session, output = path)
+                LOG.debug(f'cblaster plot written at {str(path)}')
+            
+            if self.output_flags['clinker']:
+                LOG.info("Writing clinker plot")
+                path = self.OUTPUT_DIR / "clinker.html"
+                with open(self.TEMP_DIR / "session.json", "w") as handle:
+                    cblaster_session.to_json(fp = handle)
+                plot_clusters(self.TEMP_DIR / "session.json", plot_outfile = path, max_clusters = 10**6)
+                LOG.debug(f'clinker plot written at {str(path)}')
+            
+        if self.output_flags['foldseek']:
+            LOG.info("Copying FoldSeek output")
+            for file in self.TEMP_DIR.glob('foldseek_result*'):
+                shutil.copy(file, self.OUTPUT_DIR / file.name)
+            LOG.debug(f'FoldSeek output copied to {self.OUTPUT_DIR}')
+        
+        if self.output_flags['tables']:
+            LOG.info("Writing output tables")
+            self.generate_tables(self.OUTPUT_DIR)
+            LOG.debug(f'Output tables written to {self.OUTPUT_DIR}')
+            
+        return None
     
     

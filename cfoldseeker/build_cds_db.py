@@ -9,27 +9,24 @@ warnings.filterwarnings('ignore')
 from Bio import Entrez
 import polars as pl
 from pathlib import Path
+from itertools import batched, chain
+from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 
 LOG = logging.getLogger(__name__)
-logging.basicConfig(
-    level = logging.INFO,
-    format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
-    datefmt="%H:%M:%S",
-    handlers = [logging.StreamHandler(sys.stdout)]
-    )
 
 
-def parse_arguments() -> argparse.Namespace:
+def create_parser() -> argparse.ArgumentParser:
     """
-    This function parses the arguments given through the command line.
+    This function creates a parser object that will collect the arguments given through the command line.
     
     Args:
         None
     
     Returns:
-        A Namespace object holding the parsed arguments
+        parser (ArgumentParser): An ArgumentParser object holding the CLI ready to collect the arguments when called
     """
     
     parser = argparse.ArgumentParser(
@@ -57,33 +54,91 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', help = "Force overwriting output (default: false).")
     parser.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", help = "Don't show progress bar (default: False).")
     parser.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
+    
+    return parser
 
-    args = parser.parse_args()
+
+def setup_logging(verbosity: int) -> None:
+    """
+    Set up the root logger if it has not been set up yet.
     
-    if not args.input.is_dir():
-        msg = 'Input folder does not exist.'
-        LOG.critical(msg)
-        raise argparse.ArgumentError(msg)
+    Args:
+        verbosity (int): Verbosity level (choices: 0,1,2,3,4).
+        
+    Returns:
+        None
+    """
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return None
     
-    match args.mode:
-        case 'ncbi-gff' | 'bakta-gff':
-            any(args.input.glob('*.gff')), "Input folder does not contain GFF files (mind the .gff extension)."
-        case 'ncbi-package':
-            any(args.input.glob('ncbi_dataset/data/*/genomic.gff')), "NCBI package does not contain GFF files."
-        case 'tsv':
-            any(args.input.glob('*.tsv')), "Input folder does not contain TSV files (mind the .tsv extension)."
+    log_levels = {0: logging.CRITICAL,
+                  1: logging.ERROR,
+                  2: logging.WARNING,
+                  3: logging.INFO,
+                  4: logging.DEBUG
+                  }
+    logging.basicConfig(
+        level = log_levels[verbosity],
+        format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
+        datefmt="%H:%M:%S",
+        handlers = [logging.StreamHandler(sys.stdout)]
+        )
     
-    if args.output.exists():
-        if args.force:
-            LOG.warning("Output already exists, but it will be overwritten.")
+    return None
+
+
+def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
+    """
+    This function parses and validates the arguments received through the command line.
+    
+    Args:
+        args (argparse.Namespace): A Namespace holder object with the parsed argument values
+    
+    Returns:
+        parsed_args (dict): A dictionary holding the parsed and validated argument values.
+        
+    Raises:
+        ValueError: if an invalid argument value was given.
+    """
+    # Validate arguments
+    try:
+        if not args.input.is_dir():
+            raise ValueError('Input folder does not exist.')
+            
+        if args.output.exists():
+            if args.force:
+                LOG.warning("Output already exists, but it will be overwritten.")
+            else:
+                raise ValueError("Output already exists! Rerun with -f to overwrite it.")
         else:
-            msg = "Output already exists! Rerun with -f to overwrite it."
-            LOG.error(msg)
-            raise IOError(msg)
-    else:
-        args.output.parent.mkdir(parents = True, exist_ok = True)
+            args.output.parent.mkdir(parents = True, exist_ok = True)
     
-    return args
+        match args.mode:
+            case 'ncbi-gff' | 'bakta-gff':
+                if not(any(args.input.glob('*.gff'))):
+                    raise ValueError("Input folder does not contain GFF files (mind the .gff extension).")
+            case 'ncbi-package':
+                if not(any(args.input.glob('ncbi_dataset/data/*/genomic.gff'))):
+                    raise ValueError("NCBI package does not contain GFF files.")
+            case 'tsv':
+                if not(any(args.input.glob('*.tsv'))):
+                    raise ValueError("Input folder does not contain TSV files (mind the .tsv extension).")
+                    
+    except ValueError as err:
+        LOG.critical(err)
+        raise err
+    
+    # Convert validated arguments to dictionary
+    parsed_args = vars(args)
+    
+    # Further specify the gzip option
+    if args.gzip:
+        parsed_args['gzip'] = "gzip"
+    else:
+        parsed_args['gzip'] = "uncompressed"
+    
+    return parsed_args
 
 
 def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl.LazyFrame:
@@ -219,7 +274,7 @@ def _parse_one_tsv(numbered_filepath: tuple) -> pl.LazyFrame:
     return cds_record
 
 
-def parse_inputs(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = False) -> pl.LazyFrame:
+def parse_files(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = False) -> pl.LazyFrame:
     """
     Parses all input files and constructs a draft CDS coordinates database.
     
@@ -351,7 +406,8 @@ def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyF
     return cds_db
 
 
-def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str, max_attempts: int = 3) -> pl.LazyFrame:
+def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str, 
+                     batch_size: int = 250, max_attempts: int = 5) -> pl.LazyFrame:
     """
     Set taxon labels as either scientific names or filenames.
     
@@ -367,8 +423,9 @@ def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str, ma
             names (Bakta). If False, uses filenames as taxon labels.
         parsing_mode (str)): The format mode used for parsing ('ncbi-gff', 'ncbi-package',
             'bakta-gff', or 'tsv').
+        batch_size (int): Number of taxon names to fetch in one batch. Defaults to 250.
         max_attempts (int): Maximum numbers of times to attempt fetching the taxon names
-            using Entrez. Defaults to 3.
+            using Entrez. Defaults to 5.
         
     Returns:
         cds_db (polars.LazyFrame): The input DataFrame with a new 'taxon_name' column and
@@ -391,20 +448,21 @@ def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str, ma
             LOG.info('Fetching taxon names using NCBI Entrez')
             all_taxon_ids = cds_db.select('taxon_id').unique()
             all_taxon_ids = all_taxon_ids.collect().to_series().to_list() # Local materialisation
-            for attempt in range(max_attempts):
-                try:
-                    with Entrez.esummary(db = 'taxonomy', id = all_taxon_ids) as handle:
-                        records = list(Entrez.read(handle))
-                    all_taxon_names = [str(i['ScientificName']) for i in records]
-                    break
-                except:
-                    if attempt+1<max_attempts:
-                        LOG.warning(f'Failed fetching taxon names in attempt {attempt+1}. Retrying...')
-                        continue
-                    else:
-                        msg = f'Failed fetching taxon names in {max_attempts} attempts. Giving up...'
-                        LOG.error(msg)
-                        raise RuntimeError(msg)
+            
+            # Split the list up in batches, and fetch each batch
+            with logging_redirect_tqdm(loggers = [LOG]):
+                all_taxon_names = []
+                for batch_idx, batch_ids in tqdm(list(enumerate(batched(all_taxon_ids, batch_size))),
+                                                 leave = False):
+                    try:
+                        batch_names = fetch_taxon_names(batch_ids, max_attempts = max_attempts)
+                        all_taxon_names.append(batch_names)
+                    except RuntimeError as err:
+                        LOG.error(f"Error fetching taxon names for batch {batch_idx}!")
+                        raise err
+            
+            # Chain all fetched lists of taxon names
+            all_taxon_names = list(chain(*all_taxon_names))
             
             # Join with the CDS DB
             LOG.info('Adding taxon name column')
@@ -433,34 +491,61 @@ def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str, ma
     return cds_db
 
 
-def main():
+def fetch_taxon_names(taxon_ids: list, max_attempts: int = 5) -> list:
     """
-    Main entry point for the CDS database construction tool.
+    Fetch NCBI taxon names for a given list of NCBI taxon IDs.
     
-    Orchestrates the complete workflow: parses command-line arguments, loads
-    and parses input files, validates contig uniqueness, assigns taxon labels,
+    Fetches summary objects for a given list of NCBI Taxonomy IDs using BioPython's
+    Entrez API with retry logic, and extracts the taxon name from each summary.
+    
+    Args:
+        taxon_ids (list): List of NCBI taxon IDs as strings.
+        max_attempts (int): Maximum numbers of attempts to retry fetching in
+            case of a failure. Defaults to 5.
+            
+    Returns:
+        taxon_names (list): List of NCBI taxon names
+    """
+    for attempt in range(max_attempts):
+        try:
+            with Entrez.esummary(db = 'taxonomy', id = taxon_ids) as handle:
+                records = list(Entrez.read(handle))
+            taxon_names = [str(i['ScientificName']) for i in records]
+            break
+        except:
+            if attempt+1<max_attempts:
+                LOG.warning(f'Failed fetching taxon names in attempt {attempt+1}. Retrying...')
+                continue
+            else:
+                msg = f'Failed fetching taxon names in {max_attempts} attempts. Giving up...'
+                LOG.error(msg)
+                raise RuntimeError(msg)
+    
+    return taxon_names
+
+
+def run_workflow(parsed_args: dict) -> None:
+    """
+    Execute the complete CDS database construction workflow.
+    
+    Loads and parses input files, validates contig uniqueness, assigns taxon labels,
     and writes the final CDS coordinates database to disk as a tab-separated file.
     Supports optional gzip compression.
+    
+    Returns:
+        None
     
     Note:
         This workflow uses a lazy parsing method to limit RAM usage. This comes at
         the cost of the files being parsed multiple times, which is slower.
     """
-    # Process arguments
-    args = parse_arguments()
-    cores = args.cores
-    input_path = args.input
-    output_path = args.output
-    parsing_mode = args.mode
-    use_taxa = args.use_taxa
-    no_progress = args.no_progress
-    if args.gzip:
-        gzip = "gzip"
-    else:
-        gzip = "uncompressed"
+    # Unpack arguments
+    (cores, input_path, output_path, parsing_mode,
+     use_taxa, no_progress, gzip) = map(parsed_args.get, ['cores', 'input', 'output', 'mode', 
+                                                          'use_taxa', 'no_progress', 'gzip'])
         
     # Parse the input files
-    cds_db = parse_inputs(input_path, parsing_mode, n_workers = cores, no_progress = no_progress)
+    cds_db = parse_files(input_path, parsing_mode, n_workers = cores, no_progress = no_progress)
     
     # Check for duplicate contig labels
     cds_db = check_duplicate_contigs(cds_db, parsing_mode)
@@ -472,6 +557,29 @@ def main():
     LOG.info('Writing DB to disk')
     cds_db = cds_db.select(['gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'taxon_name'])
     cds_db.sink_csv(output_path, separator = '\t', include_header = False, compression = gzip)
+    
+    return None
+
+
+def main():
+    """
+    Main entry point for the CDS database construction tool.
+    
+    Oversees the complete workflow: parses command-line arguments, and calls
+    the workflow.
+    """
+    # Process arguments
+    parser = create_parser()
+    # Parse arguments
+    args = parser.parse_args()
+    # Validate arguments
+    parsed_args = parse_and_validate_arguments(args)
+    
+    # Set up logging
+    setup_logging(args.verbosity)
+    
+    # Run workflow
+    run_workflow(parsed_args)
     
     
 if __name__ == "__main__":
