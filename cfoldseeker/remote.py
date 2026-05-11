@@ -71,7 +71,7 @@ class RemoteSearch(Search):
             None
         """
         
-        super().__init__(query, params, hits, clusters, output_folder, temp_folder)
+        super().__init__(query, params, hits, clusters, output_flags, output_folder, temp_folder)
         
         LOG.debug(f'Scanning ID mapping table from {str(mapping_table_path)}')
         self.mapping_table: pl.LazyFrame = pl.scan_csv(mapping_table_path, has_header = False, separator = "\t",
