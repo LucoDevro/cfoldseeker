@@ -119,7 +119,7 @@ def retrieve_foldseek_results(job_id: str) -> dict:
             LOG.debug(f"Job {job_id} has completed! Downloading results...")
             entry = 0
             url = f"{FOLDSEEK_RESULTS_URL}/{job_id}/{entry}"
-            results = requests.get(url).json()
+            results = requests.get(url, timeout = 300).json()
             break
         else:
             LOG.debug(f'Job status: {status}')
