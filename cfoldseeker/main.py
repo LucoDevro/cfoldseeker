@@ -130,7 +130,7 @@ def setup_logging(verbosity: int) -> None:
     return None
 
 
-def parse_and_validate_arguments(args: argparse.Namespace, skip_csuite_IO_checks: bool = False) -> dict:
+def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_check: bool = False) -> dict:
     """
     This function validates the parsed arguments given through the command line.
     
@@ -187,7 +187,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_csuite_IO_checks
             db = ["local"]
             if not(args.local_db_path.is_file()):
                 raise ValueError("Local FoldSeek DB does not exist.")
-            if not skip_csuite_IO_checks:
+            if not skip_context_table_check:
                 if not(args.cds_db_path.is_file()):
                     raise ValueError("CDS mapping table path does not exist or is not a file.")
         case 'local_clustered':
@@ -196,7 +196,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_csuite_IO_checks
                 raise ValueError("Local FoldSeek DB does not exist.")
             if not(args.seq_clusters.is_file()):
                 raise ValueError("MMseqs2 clustering table does not exist.")
-            if not skip_csuite_IO_checks:
+            if not skip_context_table_check:
                 if not(args.cds_db_path.is_file()):
                     raise ValueError("CDS mapping table path does not exist or is not a file.")
     
