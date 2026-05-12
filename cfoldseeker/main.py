@@ -15,7 +15,13 @@ from cfoldseeker.local_clustered import LocalClusteredSearch
 
 __version__ = version("cfoldseeker")
 
-
+# Setup default logger configuration
+logging.basicConfig(
+    level = logging.INFO,
+    format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
+    datefmt="%H:%M:%S",
+    handlers = [logging.StreamHandler(sys.stdout)],
+    )
 LOG = logging.getLogger(__name__)
 
 
@@ -124,7 +130,8 @@ def setup_logging(verbosity: int) -> None:
         level = log_levels[verbosity],
         format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
         datefmt="%H:%M:%S",
-        handlers = [logging.StreamHandler(sys.stdout)]
+        handlers = [logging.StreamHandler(sys.stdout)],
+        force = True
         )
     
     return None
