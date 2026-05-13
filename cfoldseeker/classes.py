@@ -10,6 +10,7 @@ import networkx as nx
 from abc import ABC, abstractmethod
 from pathlib import Path
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+from tqdm.contrib.concurrent import thread_map
 from cblaster.classes import Session
 from cblaster.plot import plot_session
 from cblaster.plot_clusters import plot_clusters
@@ -383,7 +384,7 @@ class Search(ABC):
         pass
     
     @abstractmethod
-    def parse_foldseek_results(self):
+    def identify_hits(self):
         """
         Parse FoldSeek output and populate the hits list.
         
@@ -420,8 +421,10 @@ class Search(ABC):
         ## and filter out the ones failing the intergenic threshold
         ## and filter out self-hits as these are not genuine collocalised genes
         LOG.info("Calculating intergenic distances")
-        close_groups = []
-        for _, hits in scaff_groups.items():
+        
+        # Auxiliary function to calculate and filter the intergenic distance pairs
+        # Necessary for multithreading support using thread_map
+        def calculate_and_filter_intergenic_dist_pairs(hits: list[Hit]) -> dict:
             # Calculate the intergenetic distances and find the self-hits
             pairs_to_test = list(it.combinations(hits, 2))
             self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
@@ -431,9 +434,18 @@ class Search(ABC):
             dists = {k:v for k,v in dists.items() if v <= max_gap} # apply max gap criterium
             dists = {k:v for k,v in dists.items() if not self_hits[k]} # filter out self-hits
             
-            # Collect if there's a group of proximal hits on this scaffold
-            if len(dists) > 0:
-                close_groups.append(list(dists.keys()))
+            return dists
+        
+        # Calculate and filter gene groups by distance in a multi-threaded way
+        all_hit_groups = list(scaff_groups.values())
+        close_groups = thread_map(calculate_and_filter_intergenic_dist_pairs,
+                                  all_hit_groups,
+                                  max_workers = self.params['cores'],
+                                  leave = False,
+                                  disable = self.params['no_progress'],
+                                  )
+        # Keep the ones passing all thresholds
+        close_groups = [list(cg.keys()) for cg in close_groups if len(cg) > 0]
                 
         ## Abort if there are no proximal hit groups
         if len(close_groups) == 0:

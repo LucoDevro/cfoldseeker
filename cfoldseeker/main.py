@@ -116,10 +116,6 @@ def setup_logging(verbosity: int) -> None:
     Returns:
         None
     """
-    root_logger = logging.getLogger()
-    if root_logger.handlers:
-        return None
-    
     log_levels = {0: logging.CRITICAL,
                   1: logging.ERROR,
                   2: logging.WARNING,

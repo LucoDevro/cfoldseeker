@@ -213,7 +213,7 @@ class RemoteSearch(Search):
         return all(criteria_passes)
     
     
-    def parse_foldseek_results(self) -> None:
+    def identify_hits(self) -> None:
         """
         Parse FoldSeek results and create Hit objects for hits passing the predefined criteria.
         
@@ -707,8 +707,8 @@ class RemoteSearch(Search):
         self.run_foldseek()
         LOG.info('FINISHED PART 1')
         
-        LOG.info("STARTING PART 2: Parsing FoldSeek results")
-        self.parse_foldseek_results()
+        LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")
+        self.identify_hits()
         LOG.info('FINISHED PART 2')
         
         LOG.info('STARTING PART 2B: Fetching CDS coordinates via crossreffing')

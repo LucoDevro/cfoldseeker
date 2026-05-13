@@ -2,12 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import re
 import polars as pl
 from pathlib import Path
 
 from cfoldseeker.local import LocalSearch
-from cfoldseeker.classes import Hit
 
 
 LOG = logging.getLogger(__name__)
@@ -60,7 +58,7 @@ class LocalClusteredSearch(LocalSearch):
         return f"Local Clustered Search of {','.join(list(self.query.keys()))} with {len(self.clusters)} clusters identified"
     
     
-    def expand_sequence_clusters(self, foldseek_result: pl.LazyFrame) -> pl.LazyFrame:
+    def expand_sequence_clusters(self, results: pl.DataFrame) -> pl.DataFrame:
         """
         Expand a given FoldSeek result table with all members of the original hits' sequence clusters.
         
@@ -72,123 +70,58 @@ class LocalClusteredSearch(LocalSearch):
         Hit metadata are taken over from the representative protein.
         
         Args:
-            foldseek_result (polars.LazyFrame): Original FoldSeek result table with only the representative proteins
+            results (polars.DataFrame): Original FoldSeek result table with only the representative proteins
             
         Returns:
-            expanded_results (polars.LazyFrame): Result table with all added non-representative proteins 
+            expanded_results (polars.DataFrame): Result table with all added non-representative proteins 
             for each representative
         """
+        LOG.info('Expanding the hit set with sequence cluster members')
+        
+        # Identify which genes remained after filtering
+        filtered_genes = results.select('target').unique()
+        
+        # Prefilter clustering table for present genes
+        LOG.info('Prefiltering sequence clustering table')
+        seq_clust_filt = self.seq_clust.filter(pl.col('representative').is_in(filtered_genes['target']))
+        seq_clust_filt = seq_clust_filt.collect() # Materialise for join efficiency
+        
         # Include all sequence cluster members by joining with the MMseqs2 clustering table
-        expanded_results = self.seq_clust.join(foldseek_result, left_on = "representative", right_on = 'target')
+        LOG.info('Adding sequence cluster members')
+        expanded_results = seq_clust_filt.join(results, left_on = "representative", right_on = 'target')
         
         # Keep only one hit in case a protein/query pair reoccurs
         # (e.g. different proteins in different assemblies with identical labels at NCBI)
         expanded_results = expanded_results.drop('representative').unique(subset = ['protein', 'query'])
         
+        # Rename the protein column back to target as in the original results dataframe
+        expanded_results = expanded_results.rename({'protein': 'target'})
+        
         return expanded_results
     
     
-    def parse_foldseek_results(self):
+    def identify_hits(self) -> None:
         """
-        Parse the FoldSeek result table, expand it to include all members of the sequence clusters,
-        and generate Hit objects with filled genomic coordinates.
+        Identify hits passing the hit thresholds from the FoldSeek results.
         
-        Reads the FoldSeek result table, expands it with all members of each sequence cluster of
-        which the original FoldSeek hits are the representatives (by joining with the clustering table),
-        applies filtering thresholds (bit score, query coverage, target coverage), removes duplicate hits,
-        and joins results with the CDS coordinates database. Parses genomic coordinates from the
-        coordinate string and creates Hit objects for each match.
-        
-        The following filtering thresholds are applied:
-        1. Sequence identity >= min_seqid
-        2. E-value <= max_eval
-        3. Bit score >= min_score
-        4. Query coverage >= min_qcov (converted to percentage)
-        5. Target coverage >= min_tcov (converted to percentage)
+        Parses the FoldSeek results table and applies hit-level filtering, then
+        fetches genomic context information for each hit from the context DB,
+        and collects freshly instantiated Hit objects to host all metadata.
         
         Returns:
             None
             
-        Note:
-            Stores generated Hit objects in self.hits as a list. Genomic coordinates
-            are parsed from a comma-separated string of joined range pairs (e.g., "10..50",
-            "join(150..200,250..300)") into nested lists of integers.
+        Mutates:
+            self.hits: Instantiates the list of identified Hit objects.
         """
-        ## Load the thresholds from params
-        min_score = self.params['min_score']
-        min_qcov = self.params['min_qcov']
-        min_tcov = self.params['min_tcov']
-        min_seqid = self.params['min_seqid']
-        max_eval = self.params['max_eval']
+        # Parses FoldSeek results and applies hit-level filtering
+        parsed_results = self.parse_foldseek_results()
         
-        ## Parse results table
-        LOG.debug(f"Scanning FoldSeek result table at {str(self.TEMP_DIR / 'foldseek_result.txt')}")
-        results = pl.scan_csv(self.TEMP_DIR / 'foldseek_result.txt', has_header = True, separator = "\t")
-        results = results.unique() # Discard duplicate hits
+        # Adds all sequence cluster members for each hit
+        expanded_results = self.expand_sequence_clusters(parsed_results)
         
-        ## Expanding sequence clusters
-        LOG.info('Expanding the sequence clusters')
-        results = self.expand_sequence_clusters(results)
-        
-        ## Convert tcov and qcov to percentages
-        results = results.with_columns([pl.col("qcov") * 100, pl.col('tcov') * 100])
-        
-        ## Filter hits
-        LOG.debug('Applying the following hit filtering thresholds:')
-        LOG.debug(f'sequence identity >= {min_seqid}')
-        LOG.debug(f'evalue <= {max_eval}')
-        LOG.debug(f'bitscore >= {min_score}')
-        LOG.debug(f'query coverage >= {min_qcov}')
-        LOG.debug(f'target coverage >= {min_tcov}')
-        
-        results = results.filter(pl.col('pident') >= min_seqid)
-        results = results.filter(pl.col('evalue') <= max_eval)
-        results = results.filter(pl.col('bits') >= min_score)
-        results = results.filter(pl.col('qcov') >= min_qcov)
-        results = results.filter(pl.col('tcov') >= min_tcov)
-        
-        ## Join with coordinates DB
-        LOG.info('Fetching CDS coordinates from local CDS DB')
-        results = results.join(self.coord_db, left_on = 'protein', right_on = 'gene_tag')
-        
-        ## Discard the alignment coordinates columns
-        results = results.drop("tstart", "tend", "qstart", "qend")
-        
-        ## Materialise the LazyFrame
-        results = results.collect()
-        LOG.info(f"Found {results.height} gene hits.")
-
-        ## Generate the Hit objects
-        LOG.debug('Generating the Hit objects')
-        results_it = results.iter_rows(named = True)
-        all_hits = []
-        for result in results_it:
-            # Parse the genomic coordinates on the fly
-            coord_groups = re.findall(r'\d+\.\.\d+', result['coords'])
-            coord_groups = [i.split('..') for i in coord_groups]
-            coord_groups = [[int(j) for j in i] for i in coord_groups]
-            
-            hit = Hit(db_id = result['protein'],
-                      crossref_id = result['protein'],
-                      query = result['query'],
-                      name = result['name'],
-                      taxon_name = result['taxon_name'],
-                      taxon_id = result['taxon_id'],
-                      db = "local_clustered",
-                      crossref_method = 'local_clustered',
-                      evalue = result["evalue"],
-                      score = result["bits"],
-                      seqid = result["pident"],
-                      qcov = result["qcov"],
-                      tcov = result["tcov"],
-                      scaff = result['contig'],
-                      strand = result['strand'],
-                      coords = coord_groups)
-            all_hits.append(hit)
-        
-        self.hits = all_hits
-        
-        LOG.info(f'{len(all_hits)} hits have been processed.')
+        # Adds genomic context and instantiates Hit objects
+        self.collect_hits(expanded_results)
         
         return None
     
@@ -209,8 +142,8 @@ class LocalClusteredSearch(LocalSearch):
         self.run_foldseek()
         LOG.info("FINISHED PART 1")
         
-        LOG.info("STARTING PART 2: Parsing FoldSeek results")
-        self.parse_foldseek_results()
+        LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")
+        self.identify_hits()
         LOG.info('FINISHED PART 2')
         
         LOG.info("STARTING PART 3: Identifying gene clusters")

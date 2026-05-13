@@ -180,13 +180,15 @@ class LocalSearch(Search):
         return None        
     
     
-    def parse_foldseek_results(self) -> None:
+    def parse_foldseek_results(self) -> pl.DataFrame:
         """
-        Parse the FoldSeek result table and generate Hit objects with filled genomic coordinates.
+        Parse the FoldSeek result table, expand it to include all members of the sequence clusters,
+        and generate Hit objects with filled genomic coordinates.
         
-        Reads the FoldSeek result table, applies filtering thresholds (bit score,
-        query coverage, target coverage), removes duplicate hits, and joins results
-        with the CDS coordinates database. Parses genomic coordinates from the
+        Reads the FoldSeek result table, expands it with all members of each sequence cluster of
+        which the original FoldSeek hits are the representatives (by joining with the clustering table),
+        applies filtering thresholds (bit score, query coverage, target coverage), removes duplicate hits,
+        and joins results with the CDS coordinates database. Parses genomic coordinates from the
         coordinate string and creates Hit objects for each match.
         
         The following filtering thresholds are applied:
@@ -197,14 +199,8 @@ class LocalSearch(Search):
         5. Target coverage >= min_tcov (converted to percentage)
         
         Returns:
-            None
-            
-        Note:
-            Stores generated Hit objects in self.hits as a list. Genomic coordinates
-            are parsed from a comma-separated string of joined range pairs (e.g., "10..50,
-            join(150..200,250..300)") into nested lists of integers.
+            results (polars.DataFrame): A filtered FoldSeek hits table
         """
-        
         ## Load the thresholds from params
         min_score = self.params['min_score']
         min_qcov = self.params['min_qcov']
@@ -213,7 +209,8 @@ class LocalSearch(Search):
         max_eval = self.params['max_eval']
         
         ## Parse results table
-        LOG.debug(f"Scanning FoldSeek result table at {str(self.TEMP_DIR / 'foldseek_result.txt')}")
+        LOG.info('Scanning FoldSeek result table')
+        LOG.debug(f"Path: {str(self.TEMP_DIR / 'foldseek_result.txt')}")
         results = pl.scan_csv(self.TEMP_DIR / 'foldseek_result.txt', has_header = True, separator = "\t")
         results = results.unique() # Discard duplicate hits
         
@@ -221,7 +218,8 @@ class LocalSearch(Search):
         results = results.with_columns([pl.col("qcov") * 100, pl.col('tcov') * 100])
         
         ## Filter hits
-        LOG.debug('Applying the following hit filtering thresholds:')
+        LOG.info('Filtering the FoldSeek hits.')
+        LOG.debug('Applying the following thresholds:')
         LOG.debug(f'sequence identity >= {min_seqid}')
         LOG.debug(f'evalue <= {max_eval}')
         LOG.debug(f'bitscore >= {min_score}')
@@ -233,16 +231,48 @@ class LocalSearch(Search):
         results = results.filter(pl.col('bits') >= min_score)
         results = results.filter(pl.col('qcov') >= min_qcov)
         results = results.filter(pl.col('tcov') >= min_tcov)
+        results = results.collect()
         
-        ## Join with coordinates DB
-        LOG.info('Fetching CDS coordinates from local CDS DB')
-        results = results.join(self.coord_db, left_on = 'target', right_on = 'gene_tag', maintain_order = "left_right")
+        return results
+    
+    
+    def collect_hits(self, results: pl.DataFrame) -> None:
+        """
+        Collects hit instances from a filtered hit table.
+        
+        Collects and instantiates Hit objects for every hit in the filtered table,
+        after fetching genomic context data from the context database. Genomic
+        coordinate strings are parsed on-the-fly.
+        
+        Args:
+            results (polars.DataFrame): A filtered FoldSeek hits table
+            
+        Returns:
+            None
+            
+        Mutates:
+            self.hits: Instantiates the list of identified Hit objects.
+            
+        Note:
+            Stores generated Hit objects in self.hits as a list. Genomic coordinates
+            are parsed from a comma-separated string of joined range pairs (e.g., "10..50",
+            "join(150..200,250..300)") into nested lists of integers.
+        """
+        ## Add genomic context from CDS DB
+        # Identify which genes remained after filtering
+        filtered_genes = results.select('target').unique()
+        
+        # Prefilter context DB for these genes
+        LOG.info('Prefiltering context DB')
+        coord_db_filt = self.coord_db.filter(pl.col('gene_tag').is_in(filtered_genes['target']))
+        coord_db_filt = coord_db_filt.collect() # Materialise for join efficiency
+        
+        ## Join with context DB
+        LOG.info('Fetching CDS coordinates from context DB')
+        results = results.join(coord_db_filt, left_on = 'target', right_on = 'gene_tag')
         
         ## Discard the alignment coordinates columns
         results = results.drop("tstart", "tend", "qstart", "qend")
-        
-        ## Materialise the LazyFrame
-        results = results.collect()
         LOG.info(f"Found {results.height} gene hits.")
 
         ## Generate the Hit objects
@@ -261,8 +291,8 @@ class LocalSearch(Search):
                       name = result['name'],
                       taxon_name = result['taxon_name'],
                       taxon_id = result['taxon_id'],
-                      db = "local",
-                      crossref_method = 'local',
+                      db = "local_clustered",
+                      crossref_method = 'local_clustered',
                       evalue = result["evalue"],
                       score = result["bits"],
                       seqid = result["pident"],
@@ -276,6 +306,26 @@ class LocalSearch(Search):
         self.hits = all_hits
         
         LOG.info(f'{len(all_hits)} hits have been processed.')
+        
+        return None
+    
+    
+    def identify_hits(self) -> None:
+        """
+        Identify hits passing the hit thresholds from the FoldSeek results.
+        
+        Parses the FoldSeek results table and applies hit-level filtering, then
+        fetches genomic context information for each hit from the context DB,
+        and collects freshly instantiated Hit objects to host all metadata.
+        
+        Returns:
+            None
+        """
+        # Parses FoldSeek results and applies hit-level filtering
+        parsed_results = self.parse_foldseek_results()
+        
+        # Adds genomic context and instantiates Hit objects
+        self.collect_hits(parsed_results)
         
         return None
     
@@ -296,8 +346,8 @@ class LocalSearch(Search):
         self.run_foldseek()
         LOG.info("FINISHED PART 1")
         
-        LOG.info("STARTING PART 2: Parsing FoldSeek results")
-        self.parse_foldseek_results()
+        LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")
+        self.identify_hits()
         LOG.info('FINISHED PART 2')
         
         LOG.info("STARTING PART 3: Identifying gene clusters")
