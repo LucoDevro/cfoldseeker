@@ -421,10 +421,8 @@ class Search(ABC):
         ## and filter out the ones failing the intergenic threshold
         ## and filter out self-hits as these are not genuine collocalised genes
         LOG.info("Calculating intergenic distances")
-        
-        # Auxiliary function to calculate and filter the intergenic distance pairs
-        # Necessary for multithreading support using thread_map
-        def calculate_and_filter_intergenic_dist_pairs(hits: list[Hit]) -> dict:
+        close_groups = []
+        for _, hits in scaff_groups.items():
             # Calculate the intergenetic distances and find the self-hits
             pairs_to_test = list(it.combinations(hits, 2))
             self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
@@ -434,18 +432,9 @@ class Search(ABC):
             dists = {k:v for k,v in dists.items() if v <= max_gap} # apply max gap criterium
             dists = {k:v for k,v in dists.items() if not self_hits[k]} # filter out self-hits
             
-            return dists
-        
-        # Calculate and filter gene groups by distance in a multi-threaded way
-        all_hit_groups = list(scaff_groups.values())
-        close_groups = thread_map(calculate_and_filter_intergenic_dist_pairs,
-                                  all_hit_groups,
-                                  max_workers = self.params['cores'],
-                                  leave = False,
-                                  disable = self.params['no_progress'],
-                                  )
-        # Keep the ones passing all thresholds
-        close_groups = [list(cg.keys()) for cg in close_groups if len(cg) > 0]
+            # Collect if there's a group of proximal hits on this scaffold
+            if len(dists) > 0:
+                close_groups.append(list(dists.keys()))
                 
         ## Abort if there are no proximal hit groups
         if len(close_groups) == 0:
