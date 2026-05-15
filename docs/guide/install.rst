@@ -5,6 +5,11 @@ Installation
    
    Supported Python versions are 3.12, 3.13 and 3.14.
 
+.. tip::
+   
+   cfoldseeker's remote mode requires a local copy of UniProt's ID mapping table. We have prepared a ready-to-use reduced version from the 2026_01 release only containing the KEGG and GenPept rows. We attach it to every GitHib release as `uniprot_kegg_genpept.gz`.
+
+
 Conda (recommended)
 -----------------------
 
