@@ -12,7 +12,30 @@ LOG = logging.getLogger(__name__)
 
 
 class LocalClusteredSearch(LocalSearch):
+    """
+    Subclass executing the workflow for gene cluster identification from local protein
+    searches in a sequence-preclustered database using FoldSeek.
     
+    Extends the LocalSearch base class to expand identified hit sets with cluster members
+    from a premade sequence clustering of the target database. Basically runs a
+    LocalSearch against a FoldSeek structure database of sequence cluster representatives
+    and adds the sequence cluster members of their representative was identified
+    as a valid hit, before continuing with cross-reffing and gene cluster identification.
+    
+    Handles FoldSeek execution, result parsing, adding sequence cluster members,
+    Hit object generation, and gene cluster identification.
+    Uses a TSV of CDS coordinates made beforehand with cfoldseeker-cds, and
+    a TSV with the sequence cluster members made beforehand with MMseqs2.
+    
+    Attributes:
+        db_path (Path): Path to the FoldSeek protein structure target database.
+        coord_db (polars.LazyFrame): LazyFrame containing CDS coordinates
+            with columns: gene_tag, name, contig, strand, coords, taxon_id,
+            taxon_name.
+        seq_clust (polars.LazyFrame): LazyFrame containing the sequence cluster
+        representative of every sequence in the target database. These representatives
+        then form the FoldSeek target structure database.
+    """
     def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
                  output_flags = {}, output_folder = Path('.'), temp_folder = Path('.'),
                  seq_clust_tsv = Path('.')):

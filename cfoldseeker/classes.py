@@ -10,7 +10,6 @@ import networkx as nx
 from abc import ABC, abstractmethod
 from pathlib import Path
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from tqdm.contrib.concurrent import thread_map
 from cblaster.classes import Session
 from cblaster.plot import plot_session
 from cblaster.plot_clusters import plot_clusters
