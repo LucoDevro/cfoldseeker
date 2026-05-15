@@ -12,7 +12,7 @@
 `cfoldseeker` has been designed as the structural similarity-driven sister tool of [`cblaster`](https://github.com/gamcil/cblaster), which it tighly integrates for generating outputs. As such, `cfoldseeker` can naturally produce `cblaster`-style output and `clinker` visualisations.
 
 > [!TIP]
-> Although `cfoldseeker` can be used as a stand-alone tool, it is the structural similarity-based discovery engine of the ✨ [`csuite`](https://github.com/LucoDevro/csuite) ✨, our new integrated toolbox featuring streamlined workflows for both sequence and protein structure-based gene cluster mining. Try it out!
+> Although `cfoldseeker` can be used as a stand-alone tool, it is the structural similarity-based discovery engine of the ✨ [`csuite`](https://github.com/LucoDevro/csuite) ✨, our new integrated toolbox featuring streamlined workflows for both sequence- and protein structure-based gene cluster mining. Try it out!
 
 ![workflow](workflow.png)
 
@@ -32,6 +32,14 @@ If you found `cfoldseeker` useful, please cite our manuscript:
 
 ```
 De Vrieze, L., Masschelein, J. (2026) In preparation
+```
+
+`cfoldseeker` relies heavily on the following tools, so please give these proper credit as well.
+
+```
+Gilchrist, C.L.M., Booth, T.J., van Wersch, B., van Grieken, L., Medema, M.H., & Chooi, Y-H. (2021). cblaster: a remote search tool for rapid identification and visualisation of homologous gene clusters. Bioinformatics Advances, https://doi.org/10.1093/bioadv/vbab016
+van Kempen, M., Kim, S.S., Tumescheit, C., Mirdita, M., Lee, J., Gilchrist, C.L.M., Söding, J., Steinegger, M. (2024). Fast and accurate protein structure search with Foldseek. Nature Biotechnology, 42, https://doi.org/10.1038/s41587-023-01773-0
+Huckvale, E., Moseley, H.N.B. (2023). kegg_pull: a software package for the RESTful access and pulling from the Kyoto Encyclopedia of Gene and Genomes. BMC Bioinformatics, 24(78), https://doi.org/10.1186/s12859-023-05208-0
 ```
 
 ## License
