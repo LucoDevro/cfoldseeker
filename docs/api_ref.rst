@@ -64,3 +64,11 @@ build\_cds\_db
    :members:
    :undoc-members:
    :show-inheritance:
+
+export\_sequences
+--------------------------------------
+
+.. automodule:: cfoldseeker.export_sequences
+   :members:
+   :undoc-members:
+   :show-inheritance:

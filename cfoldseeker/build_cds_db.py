@@ -17,6 +17,13 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 LOG = logging.getLogger(__name__)
 
+logging.basicConfig(
+    level = logging.INFO,
+    format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
+    datefmt="%H:%M:%S",
+    handlers = [logging.StreamHandler(sys.stdout)]
+    )
+
 
 def create_parser() -> argparse.ArgumentParser:
     """
@@ -44,15 +51,28 @@ def create_parser() -> argparse.ArgumentParser:
                 add_help = False
                 )
     
-    parser.add_argument('-i', '--input', dest = 'input', type = Path, default = Path('.'), help = "Path to folder holding the input files or NCBI package (default: current directory)")
-    parser.add_argument('-m', '--mode', dest = 'mode', type = str, required = True, choices = ['ncbi-gff', 'ncbi-package', 'bakta-gff', 'tsv'],
+    parser.add_argument('-i', '--input', dest = 'input', type = Path, default = Path('.'), 
+                        help = "Path to folder holding the input files or NCBI package (default: current directory)")
+    parser.add_argument('-m', '--mode', dest = 'mode', type = str, required = True, 
+                        choices = ['ncbi-gff', 'ncbi-package', 'bakta-gff', 'tsv'],
                         help = 'File parsing mode (choices: ncbi-gff, ncbi-package, bakta-gff, tsv).')
-    parser.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('local_db'), help = "Filepath to save CDS coordinate DB (default: local_db).")
-    parser.add_argument('-gz', '--gzip', dest = 'gzip', default = False, action = 'store_true', help = "Gzip output (default: False).")
-    parser.add_argument('-tn', '--use-taxon-names', dest = 'use_taxa', default = False, action = 'store_true', help = "Use taxon names as labels for all files instead of filenames (default: False).")
-    parser.add_argument('-c', '--cores', dest = 'cores', type = int, default = 1, help = "Number of cores available to use (default: 1).")
-    parser.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', help = "Force overwriting output (default: false).")
-    parser.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", help = "Don't show progress bar (default: False).")
+    parser.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('local_db'), 
+                        help = "Filepath to save CDS coordinate DB (default: local_db).")
+    parser.add_argument('-gz', '--gzip', dest = 'gzip', default = False, action = 'store_true', 
+                        help = "Gzip output (default: False).")
+    taxon_names_fetch = parser.add_mutually_exclusive_group()
+    taxon_names_fetch.add_argument('-tna', '--taxon-names-auto', dest = 'fetch_taxa_auto', default = False, action = 'store_true', 
+                                   help = "Automatically adds taxon names to use as taxon labels instead of filenames (default: False). For NCBI files, this will fetch them from NCBI. For Bakta files, this will generate a generic taxon name locally.")
+    taxon_names_fetch.add_argument('-tnf', '--taxon-names-file', dest = 'fetch_taxa_file', default = None, type = Path, 
+                                   help = "File to fetch taxon names from to use as taxon labels instead of filenames (default: None).")
+    parser.add_argument('-c', '--cores', dest = 'cores', type = int, default = 1, 
+                        help = "Number of cores available to use (default: 1).")
+    parser.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', 
+                        help = "Force overwriting output (default: false).")
+    parser.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4], 
+                              help = "Console verbosity level (default: 3 (info))")
+    parser.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", 
+                        help = "Don't show progress bar (default: False).")
     parser.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
     
     return parser
@@ -82,7 +102,8 @@ def setup_logging(verbosity: int) -> None:
         level = log_levels[verbosity],
         format = "[%(asctime)s] %(levelname)s [%(filename)s: %(funcName)s] - %(message)s",
         datefmt="%H:%M:%S",
-        handlers = [logging.StreamHandler(sys.stdout)]
+        handlers = [logging.StreamHandler(sys.stdout),],
+        force = True
         )
     
     return None
@@ -124,6 +145,10 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
             case 'tsv':
                 if not(any(args.input.glob('*.tsv'))):
                     raise ValueError("Input folder does not contain TSV files (mind the .tsv extension).")
+                    
+        if args.fetch_taxa_file:
+            if not args.fetch_taxa_file.is_file():
+                raise ValueError("Taxon name file does not exist.")
                     
     except ValueError as err:
         LOG.critical(err)
@@ -188,7 +213,7 @@ def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> p
                             pl.concat_str(['start', 'end'], separator = '..').alias('coords'),
                             pl.col('strand'),
                             pl.lit(taxon_id).alias('taxon_id'),
-                            pl.lit(filename).alias('filename') # temporary filename column to help construct a taxon name column later
+                            pl.lit(filename).alias('filelabel')
                             ])
     cds_record = cds_record.drop_nulls(subset = 'gene_tag')
     
@@ -234,7 +259,7 @@ def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.LazyFrame:
                             pl.concat_str(['start', 'end'], separator = '..').alias('coords'),
                             pl.col('strand'),
                             pl.lit(taxon_id).alias('taxon_id'),
-                            pl.lit(filename).alias('filename') # temporary filename column to help construct a taxon name column later
+                            pl.lit(filename).alias('filelabel')
                             ])
     cds_record = cds_record.drop_nulls(subset = 'gene_tag')
     
@@ -406,8 +431,8 @@ def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyF
     return cds_db
 
 
-def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str, 
-                     batch_size: int = 250, max_attempts: int = 5) -> pl.LazyFrame:
+def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_file: Path, 
+                     parsing_mode: str, batch_size: int = 250, max_attempts: int = 5) -> pl.LazyFrame:
     """
     Set taxon labels as either scientific names or filenames.
     
@@ -419,8 +444,11 @@ def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str,
     Args:
         cds_db (polars LazyFrame): Dataframe containing CDS records with 'taxon_id',
             'filename', and optionally 'gene_tag' columns.
-        use_taxa (bool): If True, uses scientific names (NCBI) or generates generic
-            names (Bakta). If False, uses filenames as taxon labels.
+        fetch_taxa_ncbi (bool): If True, uses scientific names (NCBI) or generates generic
+            names (Bakta) to use as taxon names instead of the filenames. If false,
+            the default filenames will be kept, unless a rename file was supplied.
+        fetch_taxa_file (Path | None): Path to the rename file with the taxon names to
+            replace the current ones sourced from the filenames. Defaults to None.
         parsing_mode (str)): The format mode used for parsing ('ncbi-gff', 'ncbi-package',
             'bakta-gff', or 'tsv').
         batch_size (int): Number of taxon names to fetch in one batch. Defaults to 250.
@@ -441,53 +469,78 @@ def set_taxon_labels(cds_db: pl.LazyFrame, use_taxa: bool, parsing_mode: str,
         This function contains a potential local partial materialisation of the LazyFrame.
         This triggers all files to be parsed.
     """
-    # In case of NCBI files
-    if 'ncbi' in parsing_mode:
-        # Fetch all taxon names if requested
-        if use_taxa:
-            LOG.info('Fetching taxon names using NCBI Entrez')
-            all_taxon_ids = cds_db.select('taxon_id').unique()
-            all_taxon_ids = all_taxon_ids.collect().to_series().to_list() # Local materialisation
+    match parsing_mode:
+        # In case of NCBI files
+        case str(parsing_mode) if 'ncbi' in parsing_mode:
             
-            # Split the list up in batches, and fetch each batch
-            with logging_redirect_tqdm(loggers = [LOG]):
-                all_taxon_names = []
-                for batch_idx, batch_ids in tqdm(list(enumerate(batched(all_taxon_ids, batch_size))),
-                                                 leave = False):
-                    try:
-                        batch_names = fetch_taxon_names(batch_ids, max_attempts = max_attempts)
-                        all_taxon_names.append(batch_names)
-                    except RuntimeError as err:
-                        LOG.error(f"Error fetching taxon names for batch {batch_idx}!")
-                        raise err
+            # Fetch taxon names on-the-fly from NCBI if requested
+            if fetch_taxa_auto:
+                LOG.info('Fetching taxon names using NCBI Entrez')
+                all_taxon_ids = cds_db.select('taxon_id').unique()
+                all_taxon_ids = all_taxon_ids.collect().to_series().to_list() # Local materialisation
+                
+                # Split the list up in batches, and fetch each batch
+                with logging_redirect_tqdm(loggers = [LOG]):
+                    all_taxon_names = []
+                    for batch_idx, batch_ids in tqdm(list(enumerate(batched(all_taxon_ids, batch_size))),
+                                                     leave = False):
+                        try:
+                            batch_names = fetch_taxon_names(batch_ids, max_attempts = max_attempts)
+                            all_taxon_names.append(batch_names)
+                        except RuntimeError as err:
+                            LOG.error(f"Error fetching taxon names for batch {batch_idx}!")
+                            raise err
+                
+                # Chain all fetched lists of taxon names
+                all_taxon_names = list(chain(*all_taxon_names))
+                
+                # Join with the CDS DB
+                LOG.info('Adding taxon name column')
+                id_name_map = pl.DataFrame({'taxon_id': all_taxon_ids, 'taxon_name': all_taxon_names})
+                id_name_map = dict(zip(id_name_map['taxon_id'], id_name_map['taxon_name']))
+                cds_db = cds_db.with_columns(pl.col('taxon_id').replace(id_name_map).alias('taxon_name'))
             
-            # Chain all fetched lists of taxon names
-            all_taxon_names = list(chain(*all_taxon_names))
-            
-            # Join with the CDS DB
-            LOG.info('Adding taxon name column')
-            id_name_map = pl.DataFrame({'taxon_id': all_taxon_ids, 'taxon_name': all_taxon_names})
-            cds_db = cds_db.join(id_name_map, on = 'taxon_id', how = 'left', maintain_order = "left")
+            # Use taxon names from local mapping file if requested
+            elif fetch_taxa_file:
+                LOG.info('Fetching taxon names from local file')
+                id_name_map = pl.read_csv(fetch_taxa_file, separator = "\t", new_columns = ['old_name', 'new_name'])
+                id_name_map = dict(zip(id_name_map['old_name'], id_name_map['new_name']))
+                
+                # Replace taxon labels
+                LOG.info('Adding taxon name column')
+                cds_db = cds_db.with_columns(pl.col('filelabel').replace(id_name_map).alias('taxon_name'))
         
-        # If not requested, use filenames
-        else:
-            cds_db = cds_db.with_columns(pl.col('filename').alias('taxon_name'))
+            # Default behaviour: use filenames
+            else:
+                LOG.info('Using filenames as taxon names')
+                cds_db = cds_db.with_columns(pl.col('filelabel').alias('taxon_name'))
             
-    # In case of Bakta GFF files
-    elif parsing_mode == 'bakta-gff':
-        # Generate a generic taxon name if requested
-        if use_taxa:
-            LOG.info('Generating generic taxon names')
-            cds_db = cds_db.with_columns("Taxon " + pl.col('taxon_id').alias('taxon_name'))
-        # Otherwise, use the filename
-        else:
-            cds_db = cds_db.with_columns(pl.col('filename').alias('taxon_name'))
+        # In case of Bakta GFF files
+        case 'bakta-gff':
+            # Generate a generic taxon name if requested
+            if fetch_taxa_auto:
+                LOG.info('Generating generic taxon names')
+                cds_db = cds_db.with_columns("Taxon " + pl.col('taxon_id').alias('taxon_name'))
+                
+            # Use taxon names from local mapping file if requested
+            elif fetch_taxa_file:
+                LOG.info('Fetching taxon names from local file')
+                replacements = pl.read_csv(fetch_taxa_file, separator = "\t", new_columns = ['old_name', 'new_name'])
+                replacements = dict(zip(replacements['old_name'], replacements['new_name']))
+                
+                # Replace taxon labels
+                LOG.info('Adding taxon name column')
+                cds_db = cds_db.with_columns(pl.col('filelabel').replace(replacements).alias('taxon_name'))
+                
+            # Default behaviour: use filenames
+            else:
+                LOG.info('Using filenames as taxon names')
+                cds_db = cds_db.with_columns(pl.col('filelabel').alias('taxon_name'))
+               
+        # For other parsing modes, keep the user's annotations
+        case _:
+            pass
             
-    # For other parsing modes, keep the user's annotations
-            
-    # Drop the temporary filename column
-    cds_db = cds_db.drop('filename', strict = False)
-    
     return cds_db
 
 
@@ -532,6 +585,9 @@ def run_workflow(parsed_args: dict) -> None:
     and writes the final CDS coordinates database to disk as a tab-separated file.
     Supports optional gzip compression.
     
+    Args:
+        parsed_args (dict): A dictionary holding the parsed and validated argument values.
+    
     Returns:
         None
     
@@ -540,9 +596,9 @@ def run_workflow(parsed_args: dict) -> None:
         the cost of the files being parsed multiple times, which is slower.
     """
     # Unpack arguments
-    (cores, input_path, output_path, parsing_mode,
-     use_taxa, no_progress, gzip) = map(parsed_args.get, ['cores', 'input', 'output', 'mode', 
-                                                          'use_taxa', 'no_progress', 'gzip'])
+    (cores, input_path, output_path, parsing_mode, fetch_taxa_auto, fetch_taxa_file,
+     no_progress, gzip) = map(parsed_args.get, ['cores', 'input', 'output', 'mode', 'fetch_taxa_auto',
+                                                'fetch_taxa_file', 'no_progress', 'gzip'])
         
     # Parse the input files
     cds_db = parse_files(input_path, parsing_mode, n_workers = cores, no_progress = no_progress)
@@ -551,11 +607,11 @@ def run_workflow(parsed_args: dict) -> None:
     cds_db = check_duplicate_contigs(cds_db, parsing_mode)
     
     # Keep taxon names as assembly labels or use the filenames
-    cds_db = set_taxon_labels(cds_db, use_taxa, parsing_mode)
+    cds_db = set_taxon_labels(cds_db, fetch_taxa_auto, fetch_taxa_file, parsing_mode)
         
     # Write results
     LOG.info('Writing DB to disk')
-    cds_db = cds_db.select(['gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'taxon_name'])
+    cds_db = cds_db.select(['gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'taxon_name', 'filelabel'])
     cds_db.sink_csv(output_path, separator = '\t', include_header = False, compression = gzip)
     
     return None

@@ -95,7 +95,7 @@ class LocalSearch(Search):
         LOG.debug(f"Scanning CDS DB from {coord_db_path}")
         self.coord_db: pl.LazyFrame = pl.scan_csv(coord_db_path, has_header = False, separator = "\t",
                                                   new_columns = ['gene_tag', 'name', 'contig', 'strand', 
-                                                                 'coords', 'taxon_id', 'taxon_name'])
+                                                                 'coords', 'taxon_id', 'taxon_name', 'filelabel'])
         
         return None
     
@@ -292,6 +292,7 @@ class LocalSearch(Search):
                       taxon_name = result['taxon_name'],
                       taxon_id = result['taxon_id'],
                       db = "local_clustered",
+                      filelabel = result['filelabel'],
                       crossref_method = 'local_clustered',
                       evalue = result["evalue"],
                       score = result["bits"],

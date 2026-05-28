@@ -46,6 +46,7 @@ doc = [
 [project.scripts]
 cfoldseeker = "cfoldseeker.main:main"
 cfoldseeker-cds = "cfoldseeker.build_cds_db:main"
+cfoldseeker-seqs = "cfoldseeker.export_sequences:main"
 
 [tool.setuptools.packages.find]
 include = ["cfoldseeker*"]

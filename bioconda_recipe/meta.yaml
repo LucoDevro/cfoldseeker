@@ -1,5 +1,5 @@
 {% set name = "cfoldseeker" %}
-{% set version = "0.1.0" %}
+{% set version = "0.2.0" %}
 
 package:
   name: "{{ name|lower }}"
@@ -7,7 +7,7 @@ package:
 
 source:
   url: "https://pypi.org/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz"
-  sha256: 95917dce64effeed68a866e66793861801a00dbbab9046c864306f11947cca82
+  sha256: d5a395ca1615573919af920011a1e6bbd877103296e8739fdc494f7f8229bf37
 
 build:
   number: 0
@@ -15,6 +15,7 @@ build:
   entry_points:
     - cfoldseeker = cfoldseeker.main:main
     - cfoldseeker-cds = cfoldseeker.build_cds_db:main
+    - cfoldseeker-seqs = cfoldseeker.export_sequences:main
   script: "{{ PYTHON }} -m pip install . -vvv --no-build-isolation --no-cache-dir"
   run_exports:
     - {{ pin_subpackage('cfoldseeker', max_pin="x") }}

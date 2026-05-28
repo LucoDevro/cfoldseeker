@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath('../'))
 project = 'cfoldseeker'
 copyright = '2026, Lucas De Vrieze'
 author = 'Lucas De Vrieze'
-version = '0.0.0'
+version = '0.2.0'
 release = version
 
 # -- General configuration ---------------------------------------------------

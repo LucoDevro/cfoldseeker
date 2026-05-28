@@ -46,7 +46,7 @@ class Hit:
     """
     
     def __init__(self, db_id, query, crossref_id = [], crossref_method = '', name = '', 
-                 taxon_name = '', taxon_id = 0, db = "", evalue = 1, score = 0, 
+                 taxon_name = '', taxon_id = 0, db = "", filelabel = "", evalue = 1, score = 0, 
                  seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = [], strand = ''):
         """
         Initialise a Hit object with FoldSeek search results and genomic information.
@@ -60,6 +60,7 @@ class Hit:
             taxon_name (str, optional): Taxon name. Defaults to ''.
             taxon_id (int, optional): Taxonomic ID. Defaults to 0.
             db (str, optional): Structure database name. Defaults to "".
+            filelabel (str, optional): Filelabel of the local files with the hit's sequences in case of local DBs. Defaults to ''.
             evalue (float, optional): E-value threshold. Defaults to 1.
             score (int, optional): FoldSeek score. Defaults to 0.
             seqid (float, optional): Sequence identity percentage. Defaults to 0.
@@ -74,6 +75,7 @@ class Hit:
         # ID attributes
         self.db_id: str = db_id #ID of the hit in its DB
         self.db: str = db #Structure database the hit was found in
+        self.filelabel: str = filelabel #Filelabel of the local files the hit's sequences are encoded in case of local DBs
         self.crossref_id: list = crossref_id #ID used for crossreffing (either ID from KEGG or GenPept)
         self.crossref_method: str = crossref_method #Method used for crossreffing (either KEGG or GenPept)
         
@@ -113,6 +115,7 @@ class Hit:
                 'name': self.name,
                 'taxon_name': self.taxon_name,
                 'taxon_id': self.taxon_id,
+                'filelabel': self.filelabel,
                 'evalue': self.evalue,
                 'score': self.score,
                 'seqid': self.seqid,
@@ -232,6 +235,7 @@ class Cluster:
         scaff (str): Scaffold/contig ID (taken from first hit).
         taxon_id (str): Taxonomic ID (taken from first hit).
         taxon_name (str): Taxonomic name (taken from first hit).
+        filelabel (str): Filelabel of local sequence file (taken from first hit).
     """
     def __init__(self, hits, number = 0):
         """
@@ -274,7 +278,8 @@ class Cluster:
             raise ValueError(msg)
         else:
             self.taxon_id: str = self.hits[0].taxon_id
-            
+        
+        # Same for taxon name
         common_taxon_name = {h.taxon_name for h in self.hits}
         if len(common_taxon_name) > 1:
             msg = f"Different taxon names found ammong the gene hits in cluster {' '.join([h.db_id for h in self.hits])}."
@@ -282,6 +287,15 @@ class Cluster:
             raise ValueError(msg)
         else:
             self.taxon_name: str = self.hits[0].taxon_name
+        
+        # Same for filelabel    
+        common_filelabel = {h.filelabel for h in self.hits}
+        if len(common_filelabel) > 1:
+            msg = f"Different filelabels found among the gene hits in cluster {' '.join([h.db_id for h in self.hits])}."
+            LOG.error(msg)
+            raise ValueError(msg)
+        else:
+            self.filelabel: str = self.hits[0].filelabel
         
         return None
     
@@ -595,7 +609,7 @@ class Search(ABC):
         LOG.debug('Generating hit table')
         all_hit_data = [h.as_dict() for h in self.hits]
         all_hit_data_df = pl.DataFrame(all_hit_data, schema = ['db_id', 'query', 'scaff', 'strand', 'coords', 'db', 'crossref_id',
-                                                               'crossref_method', 'name', 'taxon_name', 'taxon_id', 'evalue', 
+                                                               'crossref_method', 'name', 'taxon_name', 'taxon_id', 'filelabel', 'evalue', 
                                                                'score', 'seqid', 'qcov', 'tcov'])
         all_hit_data_df.write_csv(output_folder / 'hits.tsv', include_header = True, separator = "\t")
         
@@ -603,7 +617,7 @@ class Search(ABC):
         LOG.debug('Writing gene cluster table')
         all_cluster_data = [cl.as_dict() for cl in self.clusters]
         all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'score', 'scaff',
-                                                                       'strand', 'taxon_name', 'taxon_id'])
+                                                                       'strand', 'taxon_name', 'taxon_id', 'filelabel'])
         all_cluster_data_df.write_csv(output_folder / 'clusters.tsv', include_header = True, separator = "\t")
         
         return None
@@ -778,10 +792,10 @@ class Search(ABC):
                                                       'bitscore': hit.score}]
                     cblaster_this_subject['name'] = hit.crossref_id
                     cblaster_this_subject['ipg'] = hit.db_id
-                    cblaster_this_subject['start'] = hit.start()
+                    cblaster_this_subject['start'] = hit.start() - 1 # Hits in cblaster are somehow one-off at the start
                     cblaster_this_subject['end'] = hit.end()
                     cblaster_this_subject['strand'] = int(f"{hit.strand}1")
-                    cblaster_this_subject['sequence'] = None
+                    cblaster_this_subject['sequence'] = hit.filelabel
                     this_scaffold['subjects'].append(cblaster_this_subject)
         
         ## Discard the taxon ID and scaffold ID nested index to get the cblaster session format
@@ -835,7 +849,7 @@ class Search(ABC):
                 LOG.info("Writing cblaster binary table")
                 path = self.OUTPUT_DIR / 'binary.txt'
                 with open(path, 'w') as handle:
-                    cblaster_session.format(form = "binary", fp = handle, delimiter = "\t")
+                    cblaster_session.format(form = "binary", fp = handle, delimiter = "\t", sort_clusters = True)
                 LOG.debug(f'cblaster binary table written at {str(path)}')
             
             if self.output_flags['plot']:
