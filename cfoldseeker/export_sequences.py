@@ -49,24 +49,38 @@ def create_parser() -> argparse.ArgumentParser:
                 """,
                 add_help = False
                 )
-    
-    parser.add_argument('-s', '--session', dest = "session", type = Path, required = True,
+    args_io = parser.add_argument_group('File inputs and outputs')
+    args_io.add_argument('-s', '--session', dest = "session", type = Path, required = True,
                         help = "Path to cfoldseeker session file.")
-    parser.add_argument('-o', '--output', dest = 'output_path', type = Path, default = Path('.'),
+    args_io.add_argument('-o', '--output', dest = 'output_path', type = Path, default = Path('.'),
                         help = 'Path to output folder (default: current workdir).')
-    parser.add_argument('-fna', '--nucleotide-fasta', dest = 'nucl_fastas_path', type = Path, required = True,
+    args_io.add_argument('-fna', '--nucleotide-fasta', dest = 'nucl_fastas_path', type = Path, required = True,
                         help = 'Path to folder with genomic nucleotide fasta files.')
-    parser.add_argument('-faa', '--protein-fasta', dest = 'prot_fastas_path', type = Path, required = True,
+    args_io.add_argument('-faa', '--protein-fasta', dest = 'prot_fastas_path', type = Path, required = True,
                         help = "Path to folder with genomic protein fasta files.")
-    parser.add_argument('-w', '--n-workers', dest = 'n_workers', type = int, default = 1,
+    
+    args_filt = parser.add_argument_group('Cluster filters')
+    args_filt.add_argument('--cluster-numbers', dest = 'cluster_numbers', type = str, nargs = '*', default = None,
+                           help = "cluster numbers to include.")
+    args_filt.add_argument("--score-threshold", dest = "score_threshold", type = float, default = None,
+                           help = "minimum score for a cluster to be included")
+    args_filt.add_argument('--organisms', dest = "organisms", type = str, nargs = '*', default = None,
+                           help = "Organism filtering regular expressions. Clusters for these organisms are included.")
+    args_filt.add_argument("--scaffolds", dest = "scaffolds", type = str, nargs = '*', default = None,
+                           help = "Clusters on these scaffolds are included.")
+    args_filt.add_argument('-mc', '--max-clusters', dest = 'max_clusters', type = int, default = None,
+                           help = "The maximum number of clusters extracted regardless of filters.")
+    
+    args_general = parser.add_argument_group('General')
+    args_general.add_argument('-w', '--n-workers', dest = 'n_workers', type = int, default = 1,
                         help = 'Number of parallel workers (default: 1).')
-    parser.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', 
+    args_general.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', 
                         help = "Force overwriting output (default: false).")
-    parser.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", 
+    args_general.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", 
                         help = "Don't show progress bar (default: False).")
-    parser.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4],
+    args_general.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4],
                         help = "Console verbosity level (default: 3 (info))")
-    parser.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
+    args_general.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
     
     return parser
 
@@ -119,6 +133,10 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     try:
         if not(args.n_workers > 0):
             raise ValueError('Number of workers must be a strictly positive integer.')
+        if args.max_clusters and not(int(args.max_clusters) > 0):
+            raise ValueError('Maximum number of clusters must be a strictly positive integer.')
+        if args.score_threshold and not(float(args.score_threshold) > 0):
+            raise ValueError('Score threshold must be a strictly positive integer.')
         if args.output_path.is_dir():
             if args.force:
                 LOG.warning("Output folder already exists, but it will be overwritten.")
@@ -145,6 +163,11 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     
     # Convert validated arguments to dictionary
     parsed_args = vars(args)
+    # Group cluster filter arguments
+    filter_names = ['cluster_numbers', 'score_threshold', 'organisms', 'scaffolds', 'max_clusters']
+    cluster_filters = {filt: parsed_args[filt] for filt in filter_names}
+    parsed_args = {k:v for k,v in parsed_args.items() if k not in filter_names}
+    parsed_args['cluster_filters'] = cluster_filters
     
     return parsed_args
 
@@ -339,6 +362,27 @@ def write_cluster_genbanks(scaffolds: list, assemblies: list, required_genes: li
     return None
 
 
+def select_clusters(session: Session, filters: dict) -> tuple:
+    """
+    Selects the clusters to process based on a selection of filtering parameters.
+    
+    Returns the cblaster cluster hierarchy filtered by a maximum number, cluster number, score, organism or scaffold.
+    
+    Args:
+        session (cblaster.Session): The cblaster session to get the hierarchy from.
+        filters (dict): dictionary of filtering parameter values.
+        
+    Returns:
+        cluster_hierarchy (tuple): Tuple of three checked out groups of objects: clusters, scaffolds and assemblies.
+        
+    Note:
+        This is a wrapper for cblaster's `get_sorted_cluster_hierarchies`.
+    """
+    cluster_hierarchy = get_sorted_cluster_hierarchies(session = session, **filters)
+    
+    return cluster_hierarchy
+
+
 def run_workflow(parsed_args: dict) -> None:
     """
     Execute the sequence export workflow.
@@ -353,7 +397,8 @@ def run_workflow(parsed_args: dict) -> None:
         None
     """
     session = Session.from_file(parsed_args['session'])
-    clusters, scaffolds, assemblies = zip(*get_sorted_cluster_hierarchies(session, max_clusters = None))
+    LOG.info('Selecting clusters')
+    clusters, scaffolds, assemblies = zip(*select_clusters(session, parsed_args['cluster_filters']))
     
     LOG.info("Locating sequences")
     nucl_locations = locate_nucleotide_sequences(scaffolds)
