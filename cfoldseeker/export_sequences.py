@@ -9,7 +9,7 @@ import argparse
 from pathlib import Path
 from tqdm.contrib.concurrent import thread_map
 from tqdm.contrib.logging import logging_redirect_tqdm
-from cblaster.classes import Session
+from cblaster.classes import Session, Scaffold
 from cblaster.extract_clusters import get_sorted_cluster_hierarchies, cluster_to_record
 from Bio import SeqIO
 
@@ -49,15 +49,30 @@ def create_parser() -> argparse.ArgumentParser:
                 """,
                 add_help = False
                 )
+    args_general = parser.add_argument_group('General')
+    args_general.add_argument('-c', '--cores', dest = 'cores', type = int, default = 1,
+                        help = 'Number of parallel workers (default: 1).')
+    args_general.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', 
+                        help = "Force overwriting output (default: false).")
+    args_general.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", 
+                        help = "Don't show progress bar (default: False).")
+    args_general.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4],
+                        help = "Console verbosity level (default: 3 (info))")
+    args_general.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")    
+    
     args_io = parser.add_argument_group('File inputs and outputs')
     args_io.add_argument('-s', '--session', dest = "session", type = Path, required = True,
                         help = "Path to cfoldseeker session file.")
-    args_io.add_argument('-o', '--output', dest = 'output_path', type = Path, default = Path('.'),
+    args_io.add_argument('-o', '--output', dest = 'output_dir', type = Path, default = Path('.'),
                         help = 'Path to output folder (default: current workdir).')
     args_io.add_argument('-fna', '--nucleotide-fasta', dest = 'nucl_fastas_path', type = Path, required = True,
                         help = 'Path to folder with genomic nucleotide fasta files.')
     args_io.add_argument('-faa', '--protein-fasta', dest = 'prot_fastas_path', type = Path, required = True,
                         help = "Path to folder with genomic protein fasta files.")
+    args_io.add_argument('--prefix', dest = 'prefix', type = str, default = '',
+                         help = "String to start the file name of each cluster with (default: '').")
+    args_io.add_argument('--flavour', dest = 'flavour', type = str, choices = ['genbank', 'bigscape'], default = 'genbank',
+                         help = 'The flavour that the extracted cluster genbank should have (choices: genbank, bigscape) (default: genbank).')
     
     args_filt = parser.add_argument_group('Cluster filters')
     args_filt.add_argument('--cluster-numbers', dest = 'cluster_numbers', type = str, nargs = '*', default = None,
@@ -69,18 +84,7 @@ def create_parser() -> argparse.ArgumentParser:
     args_filt.add_argument("--scaffolds", dest = "scaffolds", type = str, nargs = '*', default = None,
                            help = "Clusters on these scaffolds are included.")
     args_filt.add_argument('-mc', '--max-clusters', dest = 'max_clusters', type = int, default = None,
-                           help = "The maximum number of clusters extracted regardless of filters.")
-    
-    args_general = parser.add_argument_group('General')
-    args_general.add_argument('-w', '--n-workers', dest = 'n_workers', type = int, default = 1,
-                        help = 'Number of parallel workers (default: 1).')
-    args_general.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', 
-                        help = "Force overwriting output (default: false).")
-    args_general.add_argument('-np', '--no-progress', dest = 'no_progress', default = False, action = "store_true", 
-                        help = "Don't show progress bar (default: False).")
-    args_general.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4],
-                        help = "Console verbosity level (default: 3 (info))")
-    args_general.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")      
+                           help = "The maximum number of clusters extracted regardless of filters.")  
     
     return parser
 
@@ -131,19 +135,19 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     """
     # Validate arguments
     try:
-        if not(args.n_workers > 0):
+        if not(args.cores > 0):
             raise ValueError('Number of workers must be a strictly positive integer.')
         if args.max_clusters and not(int(args.max_clusters) > 0):
             raise ValueError('Maximum number of clusters must be a strictly positive integer.')
         if args.score_threshold and not(float(args.score_threshold) > 0):
             raise ValueError('Score threshold must be a strictly positive integer.')
-        if args.output_path.is_dir():
+        if args.output_dir.is_dir():
             if args.force:
                 LOG.warning("Output folder already exists, but it will be overwritten.")
             else:
-                raise ValueError("Output folder already exists! Rerun with -f to overwrite it.")
+                raise FileExistsError("Output folder already exists! Rerun with -f to overwrite it.")
         else:
-            args.output_path.mkdir(parents = True, exist_ok = True)
+            args.output_dir.mkdir(parents = True, exist_ok = True)
         if not args.session.is_file():
             raise IOError('Session file does not exist.')
         if not args.nucl_fastas_path.is_dir():
@@ -172,7 +176,7 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     return parsed_args
 
 
-def locate_nucleotide_sequences(scaffolds: list) -> pl.DataFrame:
+def locate_nucleotide_sequences(scaffolds: list[Scaffold]) -> pl.DataFrame:
     """
     Locate all nucleotide sequences to be fetched from session information.
     
@@ -199,7 +203,7 @@ def locate_nucleotide_sequences(scaffolds: list) -> pl.DataFrame:
     return pl.from_dicts(nuc_locations)
 
 
-def locate_protein_sequences(scaffolds: list) -> pl.DataFrame:
+def locate_protein_sequences(scaffolds: list[Scaffold]) -> pl.DataFrame:
     """
     Locate all protein sequences to be fetched from session information.
     
@@ -225,10 +229,11 @@ def locate_protein_sequences(scaffolds: list) -> pl.DataFrame:
     return pl.from_dicts(prot_locations)
 
 
-def _write_one_cluster_genbank(enumerated_scaffold: tuple, assemblies: list,
+def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemblies: list[str], 
+                               prefix: str, flavour: str,
                                nucl_locations: pl.DataFrame, prot_locations: pl.DataFrame,
-                               output_path: Path, nucl_fastas_path: Path, prot_fastas_path: Path,
-                               required_genes: list) -> None:
+                               output_dir: Path, nucl_fastas_path: Path, prot_fastas_path: Path,
+                               required_genes: list[str]) -> None:
     """
     Write a Genbank cluster file for each cluster on one scaffold.
     
@@ -240,11 +245,14 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple, assemblies: list,
             sourced from the session file. The parent function `write_cluster_genbanks` requires
             the index to keep track of its progress while parallising.
         assemblies (list): List of assembly filenames, sourced from the session.
+        prefix (str): String to start the file name of each cluster with.
+        flavour (str): Requested flavour of the resulting genbank file. Either regular genbank ('genbank'), or
+            a genbank with BigScape-specific fields ('bigscape').
         nucl_locations (polars.DataFrame): DataFrame with the file location of all
             nucleotide sequences to be fetched, as determined by `locate_nucleotide_sequences`.
         prot_locations (polars.DataFrame): DataFrame with the file location of all
             protein sequences to be fetched, as determined by `locate_protein_sequences`.
-        output_path (pathlib.Path): Path of the output folder.
+        output_dir (pathlib.Path): Path of the output folder.
         nucl_fastas_path (pathlib.Path): Path of the nucleotide fastas folder.
         prot_fastas_path (pathlib.Path): Path of the protein fastas folder.
         required_genes (list): List of strings corresponding with the query genes
@@ -303,11 +311,11 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple, assemblies: list,
                                        cluster_nuc_sequence = nuc_seq,
                                        organism_name = assemblies[idx],
                                        scaffold_accession = scaffold.accession,
-                                       format_ = 'genbank',
+                                       format_ = flavour,
                                        required_genes = required_genes)
         
         # Write Genbank file
-        output_file = output_path / f"cluster{cluster.number}.gbk"
+        output_file = output_dir / f"{prefix}cluster{cluster.number}.gbk"
         LOG.debug(f'Writing Genbank file {output_file.name}')
         with open(output_file, 'w') as handle:
             SeqIO.write(seq_record, handle, 'genbank')
@@ -315,9 +323,10 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple, assemblies: list,
     return None
 
 
-def write_cluster_genbanks(scaffolds: list, assemblies: list, required_genes: list,
+def write_cluster_genbanks(scaffolds: list[Scaffold], assemblies: list[str], 
+                           prefix: str, flavour: str, required_genes: list[str],
                            nucl_locations: pl.DataFrame, prot_locations: pl.DataFrame,
-                           output_path: Path, nucl_fastas_path: Path, prot_fastas_path: Path,
+                           output_dir: Path, nucl_fastas_path: Path, prot_fastas_path: Path,
                            n_workers: int = 1, no_progress: bool = False) -> None:
     """
     Write Genbank cluster files for each cluster on all scaffolds in the session.
@@ -329,13 +338,16 @@ def write_cluster_genbanks(scaffolds: list, assemblies: list, required_genes: li
     Args:
         scaffolds (list): List of cblaster Scaffold objects sourced from the session file.
         assemblies (list): List of assembly filenames, sourced from the session.
+        prefix (str): String to start the file name of each cluster with.
+        flavour (str): Requested flavour of the resulting genbank file. Either regular genbank ('genbank'), or
+            a genbank with BigScape-specific fields ('bigscape').
         required_genes (list): List of strings corresponding with the query genes
             that were marked required during the search. Sourced from the session.
         nucl_locations (polars.DataFrame): DataFrame with the file location of all
             nucleotide sequences to be fetched, as determined by `locate_nucleotide_sequences`.
         prot_locations (polars.DataFrame): DataFrame with the file location of all
             protein sequences to be fetched, as determined by `locate_protein_sequences`.
-        output_path (pathlib.Path): Path of the output folder.
+        output_dir (pathlib.Path): Path of the output folder.
         nucl_fastas_path (pathlib.Path): Path of the nucleotide fastas folder.
         prot_fastas_path (pathlib.Path): Path of the protein fastas folder.
         n_workers (int): Number of parallel worker threads. Defaults to 1.
@@ -348,9 +360,11 @@ def write_cluster_genbanks(scaffolds: list, assemblies: list, required_genes: li
     with logging_redirect_tqdm(loggers = [LOG]):
         thread_map(lambda x: _write_one_cluster_genbank(enumerated_scaffold = x,
                                                         assemblies = assemblies,
+                                                        prefix = prefix,
+                                                        flavour = flavour,
                                                         nucl_locations = nucl_locations, 
                                                         prot_locations = prot_locations,
-                                                        output_path = output_path, 
+                                                        output_dir = output_dir, 
                                                         nucl_fastas_path = nucl_fastas_path, 
                                                         prot_fastas_path = prot_fastas_path,
                                                         required_genes = required_genes),
@@ -407,13 +421,15 @@ def run_workflow(parsed_args: dict) -> None:
     LOG.info("Fetching sequences")
     write_cluster_genbanks(scaffolds = scaffolds,
                            assemblies = assemblies,
+                           prefix = parsed_args['prefix'],
+                           flavour = parsed_args['flavour'],
                            required_genes = session.params['require'],
                            nucl_locations = nucl_locations,
                            prot_locations = prot_locations,
-                           output_path = parsed_args['output_path'],
+                           output_dir = parsed_args['output_dir'],
                            nucl_fastas_path = parsed_args['nucl_fastas_path'],
                            prot_fastas_path = parsed_args['prot_fastas_path'],
-                           n_workers = parsed_args['n_workers'],
+                           n_workers = parsed_args['cores'],
                            no_progress = parsed_args['no_progress'])
     
     return None
