@@ -397,6 +397,31 @@ def select_clusters(session: Session, filters: dict) -> tuple:
     return cluster_hierarchy
 
 
+def convert_session(session: Session) -> Session:
+    """
+    Convert a cblaster session in-memory to a cfoldseeker session.
+    
+    Adds file labels at the sequence fields of each subject in the session, which
+    is necessary to retrieve the correct local genome and proteome files.
+    
+    Args:
+        session (cblaster.Session): The cblaster session to convert.
+        
+    Returns:
+        session (cblaster.Session): The converted session.
+        
+    Mutates:
+        session (cblaster.Session): The converted session.
+    """
+    for organism in session.organisms:
+        for scaff in organism.scaffolds.values():
+            for subject in scaff.subjects:
+                subject.sequence = organism.name
+                subject.id = None
+                
+    return session
+
+
 def run_workflow(parsed_args: dict) -> None:
     """
     Execute the sequence export workflow.
@@ -411,6 +436,22 @@ def run_workflow(parsed_args: dict) -> None:
         None
     """
     session = Session.from_file(parsed_args['session'])
+    
+    ## Convert a cblaster session to a cfoldseeker session
+    # Recognise which tool generated this session
+    # cblaster leaves the sequence attribute of local searches empty; cfoldseeker fills it with the local filelabel
+    first_scaffold = list(session.organisms[0].scaffolds.values())[0]
+    match first_scaffold.subjects[0].sequence:
+        # cblaster
+        case None:
+            LOG.info("Detected cblaster session. Converting to cfoldseeker session.")
+            session = convert_session(session)
+        # cfoldseeker
+        case str():
+            pass
+        case _:
+            raise ValueError('Could not determine session type!')
+    
     LOG.info('Selecting clusters')
     clusters, scaffolds, assemblies = zip(*select_clusters(session, parsed_args['cluster_filters']))
     
