@@ -138,7 +138,9 @@ class Hit:
         try:
             return min(it.chain(*self.coords))
         except ValueError:
-            return None
+            msg = f"Error getting start coordinate for {self.db_id} from {self.coords}"
+            LOG.error(msg)
+            raise ValueError(msg)
         
     
     # Returns end coordinate of the last exon
@@ -153,7 +155,9 @@ class Hit:
         try:
             return max(it.chain(*self.coords))
         except ValueError:
-            return None
+            msg = f"Error getting end coordinate for {self.db_id} from {self.coords}"
+            LOG.error(msg)
+            raise ValueError(msg)
     
     
     # Returns the sum of the exon lengths

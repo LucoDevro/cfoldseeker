@@ -281,9 +281,9 @@ class LocalSearch(Search):
         all_hits = []
         for result in results_it:
             # Parse the genomic coordinates on the fly
-            coord_groups = re.findall(r'\d+\.\.\d+', result['coords'])
+            coord_groups = re.findall(r'<?\d+\.\.>?\d+', result['coords'])
             coord_groups = [i.split('..') for i in coord_groups]
-            coord_groups = [[int(j) for j in i] for i in coord_groups]
+            coord_groups = [[int(re.sub('<|>', '', j)) for j in i] for i in coord_groups]
             
             hit = Hit(db_id = result['target'],
                       crossref_id = result['target'],
