@@ -65,10 +65,8 @@ def create_parser() -> argparse.ArgumentParser:
                         help = "Path to cfoldseeker session file.")
     args_io.add_argument('-o', '--output', dest = 'output_dir', type = Path, default = Path('.'),
                         help = 'Path to output folder (default: current workdir).')
-    args_io.add_argument('-fna', '--nucleotide-fasta', dest = 'nucl_fastas_path', type = Path, required = True,
-                        help = 'Path to folder with genomic nucleotide fasta files.')
-    args_io.add_argument('-faa', '--protein-fasta', dest = 'prot_fastas_path', type = Path, required = True,
-                        help = "Path to folder with genomic protein fasta files.")
+    args_io.add_argument('-gb', '--genbanks', dest = 'gbffs_path', type = Path, required = True,
+                        help = 'Path to folder with Genbank files.')
     args_io.add_argument('--prefix', dest = 'prefix', type = str, default = '',
                          help = "String to start the file name of each cluster with (default: '').")
     args_io.add_argument('--flavour', dest = 'flavour', type = str, choices = ['genbank', 'bigscape'], default = 'genbank',
@@ -147,20 +145,15 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
             else:
                 raise FileExistsError("Output folder already exists! Rerun with -f to overwrite it.")
         else:
-            args.output_dir.mkdir(parents = True, exist_ok = True)
+            if not args.output_dir.is_file():
+                args.output_dir.mkdir(parents = True)
+            else:
+                raise FileExistsError('Provided output folder path is an existing file.')
         if not args.session.is_file():
             raise IOError('Session file does not exist.')
-        if not args.nucl_fastas_path.is_dir():
-            raise IOError('Nucleotide fasta folder does not exist.')
-        if not args.prot_fastas_path.is_dir():
-            raise IOError('Protein fasta folder does not exist.')
+        if not args.gbffs_path.is_dir():
+            raise IOError('Genbanks folder does not exist.')
         
-        filelabels_nucl = {'.'.join(p.with_suffix('.gz').stem.split('.')[:-1]) for p in args.nucl_fastas_path.iterdir()}
-        filelabels_prot = {p.stem for p in args.prot_fastas_path.iterdir()}
-        # At least one full overlap is sufficient
-        if not (filelabels_nucl <= filelabels_prot or filelabels_nucl >= filelabels_prot):
-            raise IOError('Filelabels in nucleotide and protein fasta folders do not fully overlap.')
-            
     except (ValueError, IOError) as err:
         LOG.critical(err)
         raise err
@@ -229,10 +222,30 @@ def locate_protein_sequences(scaffolds: list[Scaffold]) -> pl.DataFrame:
     return pl.from_dicts(prot_locations)
 
 
+def read_genome(file: str | Path):
+    """
+    Open the appropriate file handle for a genome file.
+    
+    Automatically distinguishes between compressed and uncompressed files based on the file extension.
+    
+    Args:
+        file (str | Path): genome file to open
+        
+    Returns:
+        handle: A file handle to open the genome file
+    """
+    if '.gz' in Path(file).suffixes:
+        handle = gzip.open(file, mode = 'rt')
+    else:
+        handle = open(file, mode = 'r')
+        
+    return handle
+
+
 def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemblies: list[str], 
                                prefix: str, flavour: str,
                                nucl_locations: pl.DataFrame, prot_locations: pl.DataFrame,
-                               output_dir: Path, nucl_fastas_path: Path, prot_fastas_path: Path,
+                               output_dir: Path, gbffs_path: Path,
                                required_genes: list[str]) -> None:
     """
     Write a Genbank cluster file for each cluster on one scaffold.
@@ -253,8 +266,7 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
         prot_locations (polars.DataFrame): DataFrame with the file location of all
             protein sequences to be fetched, as determined by `locate_protein_sequences`.
         output_dir (pathlib.Path): Path of the output folder.
-        nucl_fastas_path (pathlib.Path): Path of the nucleotide fastas folder.
-        prot_fastas_path (pathlib.Path): Path of the protein fastas folder.
+        gbffs_path (pathlib.Path): Path of the Genbanks folder.
         required_genes (list): List of strings corresponding with the query genes
             that were marked required during the search. Sourced from the session.
     
@@ -266,46 +278,45 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
     scaffold = enumerated_scaffold[1]
     
     for cluster in scaffold.clusters:
-        # Pinpoint exact nucleotide location
-        nuc_location = nucl_locations.filter(pl.col('cluster_number') == cluster.number).to_dicts()[0]
-        nuc_file = list(nucl_fastas_path.glob(f'{nuc_location["assembly"]}*'))
-        if len(nuc_file) > 1:
-            msg = f'Found more than one genome file with this filelabel: {nuc_file}'
+        # Find Genbank file to parse from earlier fetched file locations
+        gbff_location = nucl_locations.filter(pl.col('cluster_number') == cluster.number).to_dicts()[0]
+        gbff_file = list(gbffs_path.glob(f'{gbff_location["assembly"]}*'))
+        if len(gbff_file) > 1:
+            msg = f'Found more than one genome file with this filelabel: {gbff_file}'
             LOG.error(msg)
             raise RuntimeError(msg)
-        nuc_file = nuc_file[0]
+        gbff_file = gbff_file[0]
         
-        # Fetch cluster nucleotide sequence from genome fasta
-        if '.gz' in nuc_file.suffixes:
-            handle = gzip.open(nuc_file, 'rt')
-        else:
-            handle = open(nuc_file, 'r')
-        for record in SeqIO.parse(handle, 'fasta'):
-            if record.id == nuc_location['scaffold']:
-                nuc_seq = str(record[nuc_location['start']-1 : nuc_location['end']].seq)
-                break
-        handle.close()
-                
-        # Pinpoint exact protein location
+        # Extract protein IDs
         prot_location = prot_locations.filter(pl.col('cluster_number') == cluster.number).to_dicts()
-        prot_file = list(prot_fastas_path.glob(f'{prot_location[0]["assembly"]}*'))
         prot_ids = {prot['id'] for prot in prot_location}
-        if len(prot_file) > 1:
-            msg = f'Found more than one protein file with this filelabel: {prot_file}'
-            LOG.error(msg)
-            raise RuntimeError(msg)
-        if len(prot_file) == 0:
-            LOG.warning(f'No protein file found for {prot_location[0]["assembly"]}! Skipping...')
-            continue
-        prot_file = prot_file[0]
         
-        # Fetch cluster protein sequences from protein fasta
-        with open(prot_file, 'r') as handle:
-            cluster_prot_sequences = {record.id: str(record.seq) 
-                                      for record in SeqIO.parse(handle, 'fasta') 
-                                      if record.id in prot_ids}
-        
-        # Define sequence Record
+        # Fetch sequences
+        # Parse scaffolds one by one until we have the one we need
+        with read_genome(gbff_file) as handle:
+            for record in SeqIO.parse(handle, 'genbank'):
+                # If we found the right scaffold...
+                if record.id == gbff_location['scaffold']:
+                    # ... then fetch the nucleotide sequence
+                    nuc_seq = str(record[gbff_location['start']-1 : gbff_location['end']].seq)
+                    
+                    # ... and the protein sequences
+                    cds_features = [feat for feat in record.features if feat.type == 'CDS']
+                    cluster_prot_sequences = {}
+                    for feat in cds_features:
+                        try:
+                            protein_id = feat.qualifiers['protein_id'][0].split('|')[-1]
+                        # If the protein does not have an ID, it's a pseudogene or not annotated properly
+                        except KeyError:
+                            continue
+                        if protein_id in prot_ids:
+                            protein_sequence = feat.qualifiers['translation'][0]
+                            cluster_prot_sequences[protein_id] = protein_sequence
+                    
+                    # ... and stop trying other scaffolds
+                    break
+                
+        # Define sequence Record using cblaster function
         seq_record = cluster_to_record(cluster = cluster,
                                        cluster_prot_sequences = cluster_prot_sequences,
                                        cluster_nuc_sequence = nuc_seq,
@@ -326,7 +337,7 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
 def write_cluster_genbanks(scaffolds: list[Scaffold], assemblies: list[str], 
                            prefix: str, flavour: str, required_genes: list[str],
                            nucl_locations: pl.DataFrame, prot_locations: pl.DataFrame,
-                           output_dir: Path, nucl_fastas_path: Path, prot_fastas_path: Path,
+                           output_dir: Path, gbffs_path: Path,
                            n_workers: int = 1, no_progress: bool = False) -> None:
     """
     Write Genbank cluster files for each cluster on all scaffolds in the session.
@@ -348,8 +359,7 @@ def write_cluster_genbanks(scaffolds: list[Scaffold], assemblies: list[str],
         prot_locations (polars.DataFrame): DataFrame with the file location of all
             protein sequences to be fetched, as determined by `locate_protein_sequences`.
         output_dir (pathlib.Path): Path of the output folder.
-        nucl_fastas_path (pathlib.Path): Path of the nucleotide fastas folder.
-        prot_fastas_path (pathlib.Path): Path of the protein fastas folder.
+        gbffs_path (pathlib.Path): Path of the Genbanks folder.
         n_workers (int): Number of parallel worker threads. Defaults to 1.
         no_progress (bool): Flag to disable showing the progress bar. Defaults to False.
     
@@ -365,8 +375,7 @@ def write_cluster_genbanks(scaffolds: list[Scaffold], assemblies: list[str],
                                                         nucl_locations = nucl_locations, 
                                                         prot_locations = prot_locations,
                                                         output_dir = output_dir, 
-                                                        nucl_fastas_path = nucl_fastas_path, 
-                                                        prot_fastas_path = prot_fastas_path,
+                                                        gbffs_path = gbffs_path, 
                                                         required_genes = required_genes),
                    list(enumerate(scaffolds)),
                    max_workers = n_workers,
@@ -403,6 +412,7 @@ def convert_session(session: Session) -> Session:
     
     Adds file labels at the sequence fields of each subject in the session, which
     is necessary to retrieve the correct local genome and proteome files.
+    Sets the internal ID to None to break the connection with cblaster's own DB.
     
     Args:
         session (cblaster.Session): The cblaster session to convert.
@@ -426,8 +436,8 @@ def run_workflow(parsed_args: dict) -> None:
     """
     Execute the sequence export workflow.
     
-    Loads the session, locates the nucleotide and protein sequences in the fasta folders,
-    and writes the Genbank files.
+    Loads the session, locates the nucleotide and protein sequences in the Genbanks folder,
+    and writes the cluster Genbank files.
     
     Args:
         parsed_args (dict): A dictionary holding the parsed and validated argument values.
@@ -468,8 +478,7 @@ def run_workflow(parsed_args: dict) -> None:
                            nucl_locations = nucl_locations,
                            prot_locations = prot_locations,
                            output_dir = parsed_args['output_dir'],
-                           nucl_fastas_path = parsed_args['nucl_fastas_path'],
-                           prot_fastas_path = parsed_args['prot_fastas_path'],
+                           gbffs_path = parsed_args['gbffs_path'],
                            n_workers = parsed_args['cores'],
                            no_progress = parsed_args['no_progress'])
     

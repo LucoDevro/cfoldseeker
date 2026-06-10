@@ -3,15 +3,16 @@
 
 import argparse
 import sys
+import gzip
 import logging
-import warnings
-warnings.filterwarnings('ignore')
-from Bio import Entrez
+import tempfile
 import polars as pl
+from Bio import SeqIO, Entrez
 from pathlib import Path
 from itertools import batched, chain
+from csv import DictWriter
+from functools import partial
 from tqdm import tqdm
-from tqdm.contrib.concurrent import thread_map
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 
@@ -23,6 +24,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers = [logging.StreamHandler(sys.stdout)]
     )
+
+
+ALLOWED_EXTENSIONS = ['.gb', '.gbk', '.gbff', '.gb.gz', '.gbk.gz', '.gbff.gz']
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -54,10 +58,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument('-i', '--input', dest = 'input', type = Path, default = Path('.'), 
                         help = "Path to folder holding the input files or NCBI package (default: current directory)")
     parser.add_argument('-m', '--mode', dest = 'mode', type = str, required = True, 
-                        choices = ['ncbi-gff', 'ncbi-package', 'bakta-gff', 'tsv'],
-                        help = 'File parsing mode (choices: ncbi-gff, ncbi-package, bakta-gff, tsv).')
+                        choices = ['ncbi-gbff', 'ncbi-package', 'bakta-gbff', 'tsv'],
+                        help = 'File parsing mode (choices: ncbi-gbff, ncbi-package, bakta-gbff, tsv).')
     parser.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('local_db'), 
                         help = "Filepath to save CDS coordinate DB (default: local_db).")
+    parser.add_argument('-t', '--temp', dest = "temp", type = Path, default = Path(tempfile.gettempdir()),
+                         help = "Path to store temporary files (default: your OS's default temporary directory).")
     parser.add_argument('-gz', '--gzip', dest = 'gzip', default = False, action = 'store_true', 
                         help = "Gzip output (default: False).")
     taxon_names_fetch = parser.add_mutually_exclusive_group()
@@ -65,8 +71,6 @@ def create_parser() -> argparse.ArgumentParser:
                                    help = "Automatically adds taxon names to use as taxon labels instead of filenames (default: False). For NCBI files, this will fetch them from NCBI. For Bakta files, this will generate a generic taxon name locally.")
     taxon_names_fetch.add_argument('-tnf', '--taxon-names-file', dest = 'fetch_taxa_file', default = None, type = Path, 
                                    help = "File to fetch taxon names from to use as taxon labels instead of filenames (default: None).")
-    parser.add_argument('-c', '--cores', dest = 'cores', type = int, default = 1, 
-                        help = "Number of cores available to use (default: 1).")
     parser.add_argument('-f', '--force', dest = 'force', default = False, action = 'store_true', 
                         help = "Force overwriting output (default: false).")
     parser.add_argument('-vv', '--verbosity', dest = 'verbosity', default = 3, type = int, choices = [0,1,2,3,4], 
@@ -124,24 +128,34 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     """
     # Validate arguments
     try:
+        # Input folder
         if not args.input.is_dir():
             raise ValueError('Input folder does not exist.')
             
+        # Output folder
         if args.output.exists():
             if args.force:
                 LOG.warning("Output already exists, but it will be overwritten.")
             else:
-                raise ValueError("Output already exists! Rerun with -f to overwrite it.")
+                raise FileExistsError("Output already exists! Rerun with -f to overwrite it.")
         else:
             args.output.parent.mkdir(parents = True, exist_ok = True)
+            
+        # Temp folder will always be unique
+        args.temp.mkdir(parents = True, exist_ok = True)
+        args.temp = Path(tempfile.mkdtemp(dir = args.temp))
     
         match args.mode:
-            case 'ncbi-gff' | 'bakta-gff':
-                if not(any(args.input.glob('*.gff'))):
-                    raise ValueError("Input folder does not contain GFF files (mind the .gff extension).")
+            case 'ncbi-gbff' | 'bakta-gbff':
+                genbank_files = any(chain(*[args.input.glob(f'*{ext}') 
+                                            for ext in ALLOWED_EXTENSIONS]))
+                if not(genbank_files):
+                    raise ValueError("Input folder does not contain any Genbank file (allowed extensions: .gbk, .gbff, .gb; can be gzipped).")
             case 'ncbi-package':
-                if not(any(args.input.glob('ncbi_dataset/data/*/genomic.gff'))):
-                    raise ValueError("NCBI package does not contain GFF files.")
+                genbank_files = any(chain(*[args.input.glob(f'ncbi_dataset/data/*/genomic{ext}')
+                                            for ext in ALLOWED_EXTENSIONS]))
+                if not(genbank_files):
+                    raise ValueError("NCBI package does not contain any Genbank file (mind the .gbff extension; can be gzipped).")
             case 'tsv':
                 if not(any(args.input.glob('*.tsv'))):
                     raise ValueError("Input folder does not contain TSV files (mind the .tsv extension).")
@@ -150,7 +164,7 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
             if not args.fetch_taxa_file.is_file():
                 raise ValueError("Taxon name file does not exist.")
                     
-    except ValueError as err:
+    except (ValueError, FileExistsError) as err:
         LOG.critical(err)
         raise err
     
@@ -166,153 +180,196 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     return parsed_args
 
 
-def _parse_one_ncbi_gff(numbered_filepath: tuple, in_package: bool = False) -> pl.LazyFrame:
+def read_genome(file: str | Path):
     """
-    Parses a single NCBI GFF file into a Polars LazyFrame.
+    Open the appropriate file handle for a genome file.
     
-    Extracts CDS features and their associated metadata from an NCBI-formatted GFF file,
+    Automatically distinguishes between compressed and uncompressed files based on the file extension.
+    
+    Args:
+        file (str | Path): genome file to open
+        
+    Returns:
+        handle: A file handle to open the genome file
+    """
+    if '.gz' in Path(file).suffixes:
+        handle = gzip.open(file, mode = 'rt')
+    else:
+        handle = open(file, mode = 'r')
+        
+    return handle
+
+
+def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in_package: bool = False) -> None:
+    """
+    Parses all CDS records in a single NCBI Genbank file and adds them to a temporary TSV file.
+    
+    Extracts CDS features and their associated metadata from an NCBI-formatted Genbank file,
     including taxonomic ID, gene tags, product names, genomic coordinates, and strand
-    information. Aggregates exon coordinates for multi-exon CDS records.
+    information. Joins exon coordinates for multi-exon CDS records.
     
     Args:
         numbered_filepath (tuple): A tuple containing (index, Path) where index is the file
-            number and Path is the file path to the GFF file.
+            number and Path is the file path to the Genbank file.
+        writer (csv.DictWriter): Preinitialised DictWriter object to write to the temp TSV file.
         in_package (bool): If True, extracts filename from parent directory (for NCBI package
             structure). If False, uses file stem as filename. Defaults to False.
     
     Returns:
-        A Polars LazyFrame with columns: gene_tag, name, contig, coords, strand,
-        taxon_id, and filename. Exons are aggregated into comma-separated coordinates.
+        None
+    """
+    file = numbered_filepath[1]
+    cds_records = []
+    
+    with read_genome(file) as handle:
+        # First parse the Genbank
+        records = list(SeqIO.parse(handle, 'genbank'))
+        
+        # Get filename
+        if in_package:
+            filename = file.parent.name
+        else:
+            filename = file.stem
+        
+        # Get taxon id
+        first_source_feature = [feat for feat in records[0].features if feat.type == 'source'][0]
+        first_source_feature_dbxrefs = first_source_feature.qualifiers['db_xref']
+        taxon_id = [xref for xref in first_source_feature_dbxrefs if 'taxon:' in xref][0]
+        taxon_id = int(taxon_id.split(':')[1])
+        
+        # Parse all CDS features
+        for record in records:
+            cds_features = [feat for feat in record.features if feat.type == 'CDS']
+            for feature in cds_features:
+                
+                # Try to fetch all necessary data for a CDS record
+                try:
+                    coord_intervals = ['..'.join([str(part.start), str(part.end)]) 
+                                       for part in feature.location.parts]
+                    cds_record = {
+                        'gene_tag': feature.qualifiers['protein_id'][0],
+                        'name': feature.qualifiers['product'][0],
+                        'contig': record.id,
+                        'coords': ','.join(coord_intervals),
+                        'strand': '{0:+}'.format(feature.location.strand)[0],
+                        'taxon_id': taxon_id,
+                        'filelabel': filename,
+                        }
+                    
+                    cds_records.append(cds_record)
+                    
+                # If some data is lacking, ignore this entry
+                except KeyError:
+                    continue
+    
+    # Write away the CDS records for this file
+    writer.writerows(cds_records)
+    
+    return None
+
+
+def _add_one_bakta_genbank_to_db(numbered_filepath: tuple, writer: DictWriter) -> None:
+    """
+    Parses all CDS records in a single Bakta Genbank file and adds them to a temporary TSV file.
+    
+    Extracts CDS features and their associated metadata from a Bakta-formatted Genbank file,
+    including taxonomic ID, gene tags, product names, genomic coordinates, and strand
+    information. Joins exon coordinates for multi-exon CDS records.
+    
+    Args:
+        numbered_filepath (tuple): A tuple containing (index, Path) where index is the file
+            number and Path is the file path to the Genbank file.
+        writer (csv.DictWriter): Preinitialised DictWriter object to write to the temp TSV file.
+    
+    Returns:
+        None
+    """
+    file = numbered_filepath[1]
+    cds_records = []
+    
+    with read_genome(file) as handle:
+        # First parse the Genbank
+        records = list(SeqIO.parse(handle, 'genbank'))
+        
+        # Get filename
+        filename = file.stem
+        
+        # Assign generic taxon id
+        taxon_id = numbered_filepath[0]
+        
+        # Parse all CDS features
+        for record in records:
+            cds_features = [feat for feat in record.features if feat.type == 'CDS']
+            for feature in cds_features:
+                
+                # Try to fetch all necessary data for a CDS record
+                try:
+                    coord_intervals = ['..'.join([str(part.start), str(part.end)]) 
+                                       for part in feature.location.parts]
+                    cds_record = {
+                        'gene_tag': feature.qualifiers['locus_tag'][0],
+                        'name': feature.qualifiers['product'][0],
+                        'contig': record.id,
+                        'coords': ','.join(coord_intervals),
+                        'strand': '{0:+}'.format(feature.location.strand)[0],
+                        'taxon_id': taxon_id,
+                        'filelabel': filename,
+                        }
+                    
+                    cds_records.append(cds_record)
+                    
+                # If some data is lacking, ignore this entry
+                except KeyError:
+                    continue
+    
+    # Write away the CDS records for this file
+    writer.writerows(cds_records)
+    
+    return None
+
+
+def _add_one_tsv_to_db(numbered_filepath: tuple, writer: DictWriter) -> None:
+    """
+    Reads all CDS records from a custom TSV file and adds them to a temporary TSV file.
+    
+    Reads a TSV file with CDS coordinate data. Expected header:
+    gene_tag, name, contig, coords, strand, taxon_id, filelabel.
+    
+    Args:
+        numbered_filepath (tuple): A tuple containing (index, Path) where index is the file
+            number and Path is the file path to the TSV file.
+        writer (csv.DictWriter): Preinitialised DictWriter object to write to the temp TSV file.
+    
+    Returns:
+        None
         
     Note:
-        The column filename is a temporary column that is removed by a later method in the workflow.
-        It is necessary to construct a taxon name column with NCBI Assembly accession IDs.
+        Genomic coordinates (coords) are expected to already have been formatted as joined exons. Example: "1..100,105..200".
     """
-    df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = False, comment_prefix = '#',
-                     new_columns = ['seqid', 'source', 'type', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
-                     ).select(['seqid', 'type', 'start', 'end', 'strand', 'attributes'])
-    
-    df_regions = df.filter(pl.col('type') == 'region')
-    df_cds = df.filter(pl.col('type') == 'CDS')
-    
-    # Extract taxon ID
-    taxon_id = df_regions.select(pl.col('attributes').str.extract(r'taxon:([0-9]+)')).head(1)
-    taxon_id = taxon_id.collect().rows()[0][0]
-    
-    # Get filename
-    if in_package:
-        filename = numbered_filepath[1].parent.name
-    else:
-        filename = numbered_filepath[1].stem
-
-    # Populate the CDS coords DB
-    df_cds = df_cds.drop('type')
-    cds_record = df_cds.select([pl.col('attributes').str.extract(r'protein_id=([^;]+)').alias('gene_tag'),
-                            pl.col('attributes').str.extract(r'product=([^;]+)').alias('name'),
-                            pl.col('seqid').alias('contig'),
-                            pl.concat_str(['start', 'end'], separator = '..').alias('coords'),
-                            pl.col('strand'),
-                            pl.lit(taxon_id).alias('taxon_id'),
-                            pl.lit(filename).alias('filelabel')
-                            ])
-    cds_record = cds_record.drop_nulls(subset = 'gene_tag')
-    
-    # Aggregate multiple CDSes (i.e. exons) in one record
-    cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
-    
-    return cds_record
-
-
-def _parse_one_bakta_gff(numbered_filepath: tuple) -> pl.LazyFrame:
-    """
-    Parses a single Bakta GFF file into a Polars DataFrame.
-    
-    Extracts CDS features and metadata from a Bakta-formatted GFF file, including
-    locus tags, product names, genomic coordinates, and strand information. Aggregates
-    exon coordinates for multi-exon CDS records.
-    
-    Args:
-        numbered_filepath (tuple): A tuple containing (index, Path) where index is used as
-            the generic taxon ID and Path is the file path to the GFF file.
-    
-    Returns:
-        A Polars LazyFrame with columns: gene_tag, name, contig, coords, strand,
-        taxon_id, and filename. Exons are aggregated into comma-separated coordinates.
-    """
-    df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = False, comment_prefix = '#',
-                     new_columns = ['seqid', 'source', 'type', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
-                     ).select(['seqid', 'type', 'start', 'end', 'strand', 'attributes'])
-    
-    df_cds = df.filter(pl.col('type') == 'CDS')
-    
-    # Assign generic taxon ID
-    taxon_id = numbered_filepath[0]
-    
-    # Get filename
-    filename = numbered_filepath[1].stem
-    
-    # Populate the CDS coords DB
-    df_cds = df_cds.drop('type')
-    cds_record = df_cds.select([pl.col('attributes').str.extract(r'locus_tag=([^;]+)').alias('gene_tag'),
-                            pl.col('attributes').str.extract(r'product=([^;]+)').alias('name'),
-                            pl.col('seqid').alias('contig'),
-                            pl.concat_str(['start', 'end'], separator = '..').alias('coords'),
-                            pl.col('strand'),
-                            pl.lit(taxon_id).alias('taxon_id'),
-                            pl.lit(filename).alias('filelabel')
-                            ])
-    cds_record = cds_record.drop_nulls(subset = 'gene_tag')
-    
-    # Aggregate multiple CDSes (i.e. exons) in one record
-    cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
-    
-    return cds_record
-
-
-def _parse_one_tsv(numbered_filepath: tuple) -> pl.LazyFrame:
-    """
-    Parses a single TSV file into a Polars DataFrame.
-    
-    Reads a tab-separated values file with CDS coordinate data. Expected header:
-    gene_tag, name, contig, start, end, strand, taxon_id, taxon_name. Aggregates
-    exon coordinates for multi-exon CDS records.
-    
-    Args:
-        numbered_filepath (tuple): A tuple containing (index, Path) where index is unused
-            and Path is the file path to the TSV file.
-    
-    Returns:
-        A Polars LazyFrame with columns: gene_tag, name, contig, coords, strand,
-        taxon_id, taxon_name. Exons are aggregated into comma-separated coordinates.
-    """
-    # Envisioned header: ['gene_tag', 'name', 'contig', 'start', 'end', 'strand', 'taxon_id', 'taxon_name']
-    # Exons at multiple lines
+    # Envisioned header: ['gene_tag', 'name', 'contig', 'coords', 'strand', 'taxon_id', 'filelabel']
     df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = True, comment_prefix = '#')
     
-    # Populate the CDS coords DB
-    cds_record = df.with_columns(pl.concat_str(['start', 'end'], separator = '..').alias('coords'))
-    cds_record = cds_record.drop(['start', 'end'])
+    # Check out the CDS records
+    cds_records = df.collect().to_dicts()
     
-    # Aggregate multiple CDSes (i.e. exons) in one record
-    cds_record = cds_record.group_by(pl.all().exclude('coords')).agg(pl.col('coords').str.join(','))
+    # Write away the CDS records for this file
+    writer.writerows(cds_records)
     
-    return cds_record
+    return None
+    
 
-
-def parse_files(input_path: Path, parsing_mode: str, n_workers: int = 1, no_progress: bool = False) -> pl.LazyFrame:
+def parse_files(input_path: Path, parsing_mode: str, temp_cds_db_path: Path,
+                no_progress: bool = False) -> pl.LazyFrame:
     """
-    Parses all input files and constructs a draft CDS coordinates database.
+    Parses all input files and constructs a temporary CDS coordinates database.
     
-    Dispatches file parsing based on the specified parsing mode, using
-    parallel processing to handle multiple files efficiently. Concatenates all parsed
-    results into a single DataFrame.
+    Dispatches file parsing based on the specified parsing mode, and returns
+    a lazy entry point to the temporary TSV file for further processing.
     
     Args:
         input_path (Path): Path to the folder containing input files.
-        parsing_mode (str): File format mode - one of: 'ncbi-gff', 'ncbi-package',
-            'bakta-gff', or 'tsv'.
-        n_workers (int): Number of worker threads for parallel file parsing.
-            Defaults to 1.
+        parsing_mode (str): File format mode - one of: 'ncbi-gbff', 'ncbi-package',
+            'bakta-gbff', or 'tsv'.
         no_progress (bool): If True, suppresses the progress bar during parsing.
             Defaults to False.
     
@@ -321,38 +378,37 @@ def parse_files(input_path: Path, parsing_mode: str, n_workers: int = 1, no_prog
         with columns: gene_tag, name, contig, coords, strand, taxon_id, and filename
         (or taxon_name for TSV formats).
     """
-    # Parse all GFFs
+    # Select the right workflows
     match parsing_mode:
-        case 'ncbi-gff':
-            LOG.info('Parsing all input files as NCBI GFFs')
-            parsed_gffs_to_concat = thread_map(_parse_one_ncbi_gff, list(enumerate(input_path.glob('*.gff'))),
-                                               max_workers = n_workers,
-                                               leave = False,
-                                               disable = no_progress)
+        case 'ncbi-gbff':
+            LOG.info('Parsing all input files as NCBI Genbanks')
+            parser = _add_one_ncbi_genbank_to_db
+            files = chain(*[input_path.glob(f'*{ext}') for ext in ALLOWED_EXTENSIONS])
         case 'ncbi-package':
-            LOG.info('Parsing all input files as an NCBI GFF package')
-            parsed_gffs_to_concat = thread_map(lambda x: _parse_one_ncbi_gff(x, in_package = True), 
-                                               list(enumerate(input_path.glob('ncbi_dataset/data/*/genomic.gff'))),
-                                               max_workers = n_workers,
-                                               leave = False,
-                                               disable = no_progress)
-        case 'bakta-gff':
-            LOG.info('Parsing all input files as Bakta GFFs')
-            parsed_gffs_to_concat = thread_map(_parse_one_bakta_gff, list(enumerate(input_path.glob('*.gff'))),
-                                               max_workers = n_workers,
-                                               leave = False,
-                                               disable = no_progress)
+            LOG.info('Parsing all input files as an NCBI Genbank package')
+            parser = partial(_add_one_ncbi_genbank_to_db, in_package = True)
+            files = chain(*[input_path.glob(f'ncbi_dataset/data/*/genomic{ext}') for ext in ALLOWED_EXTENSIONS])
+        case 'bakta-gbff':
+            LOG.info('Parsing all input files as Bakta Genbanks')
+            parser = _add_one_bakta_genbank_to_db
+            files = chain(*[input_path.glob(f'*{ext}') for ext in ALLOWED_EXTENSIONS])
         case 'tsv':
             LOG.info('Parsing all input files as TSVs')
-            parsed_gffs_to_concat = thread_map(_parse_one_tsv, list(enumerate(input_path.glob('*.tsv'))),
-                                               max_workers = n_workers,
-                                               leave = False,
-                                               disable = no_progress)
+            parser = _add_one_tsv_to_db
+            files = input_path.glob('*.tsv')
+    inputs = enumerate(files)
+            
+    # Parse all Genbanks and write them to a temporary TSV.GZ file
+    fieldnames = ['gene_tag', 'name', 'contig', 'coords', 'strand', 'taxon_id', 'filelabel']
+    with gzip.open(temp_cds_db_path, 'wt') as out_handle:
+        writer = DictWriter(out_handle, fieldnames, delimiter = '\t')
+        
+        for numbered_filepath in tqdm(list(inputs), leave = False, disable = no_progress): 
+            parser(numbered_filepath = numbered_filepath, writer = writer)
+       
+    # Return a LazyFrame entrypoint
+    cds_db = pl.scan_csv(temp_cds_db_path, separator = "\t", has_header = False, new_columns = fieldnames)
                 
-    # Concatenate all parsed GFF tables
-    LOG.info('Constructing CDS coordinates DB')
-    cds_db = pl.concat(parsed_gffs_to_concat)
-    
     return cds_db
 
 
@@ -361,14 +417,13 @@ def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyF
     Check for and attempt to fix duplicate contig labels per taxon.
     
     Detects cases where the same contig label appears in multiple taxa. For
-    Bakta GFF files, attempts to prepend the existing locus tag prefix to make contigs
+    Bakta files, attempts to prepend the existing locus tag prefix to make contigs
     unique. For other formats, exits with an error.
     
     Args:
         cds_db (polars.LazyFrame): A dataframe containing CDS records with 'contig',
             'taxon_id', and 'gene_tag' columns.
-        parsing_mode (str)): The format mode used for parsing ('bakta-gff', 'ncbi-gff',
-            'ncbi-package', or 'tsv').
+        parsing_mode (str)): The format mode used for parsing.
     
     Returns:
         cds_db (polars.LazyFrame): The input DataFrame with modified contig labels if a fix
@@ -396,9 +451,9 @@ def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyF
     if multi_taxa_contig.any():
         LOG.error("Detected duplicate contig labels for a taxon!")
         
-        # In case of Bakta GFFs, we may still fix this if Bakta autogenerated a unique locus tax prefix,
+        # In case of Bakta files, we may still fix this if Bakta autogenerated a unique locus tax prefix,
         # by prepending that locus tag prefix
-        if parsing_mode == 'bakta-gff':
+        if parsing_mode == 'bakta-gbff':
             LOG.error("Trying to fix this by prepending the locus tag prefix...")
             # Extract the gene tag prefix
             cds_db = cds_db.with_columns(locus_tag_prefix = pl.col('gene_tag').str.split('_').list.reverse().list.slice(1).list.reverse().list.join('_'))
@@ -438,7 +493,7 @@ def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_fil
     
     For NCBI files, optionally fetches the scientific names from NCBI Taxonomy
     via BioPython's NCBI Entrez API with retry logic.
-    For Bakta GFF files, generates generic labels or uses filenames.
+    For Bakta files, generates generic labels or uses filenames.
     For TSV files, preserves user-provided annotations.
     
     Args:
@@ -449,8 +504,7 @@ def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_fil
             the default filenames will be kept, unless a rename file was supplied.
         fetch_taxa_file (Path | None): Path to the rename file with the taxon names to
             replace the current ones sourced from the filenames. Defaults to None.
-        parsing_mode (str)): The format mode used for parsing ('ncbi-gff', 'ncbi-package',
-            'bakta-gff', or 'tsv').
+        parsing_mode (str)): The format mode used for parsing.
         batch_size (int): Number of taxon names to fetch in one batch. Defaults to 250.
         max_attempts (int): Maximum numbers of times to attempt fetching the taxon names
             using Entrez. Defaults to 5.
@@ -464,10 +518,8 @@ def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_fil
             the 'filename' column removed.
             
     Note:
-        This function removes the temporary column 'filename' if present, as it may
-        have been introduced when parsing NCBI GFF files.
-        This function contains a potential local partial materialisation of the LazyFrame.
-        This triggers all files to be parsed.
+        This function contains a potential local partial materialisation of the LazyFrame
+        when fetching taxon names automatically. This triggers all files to be parsed an additional time.
     """
     match parsing_mode:
         # In case of NCBI files
@@ -515,8 +567,8 @@ def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_fil
                 LOG.info('Using filenames as taxon names')
                 cds_db = cds_db.with_columns(pl.col('filelabel').alias('taxon_name'))
             
-        # In case of Bakta GFF files
-        case 'bakta-gff':
+        # In case of Bakta files
+        case 'bakta-gbff':
             # Generate a generic taxon name if requested
             if fetch_taxa_auto:
                 LOG.info('Generating generic taxon names')
@@ -596,12 +648,15 @@ def run_workflow(parsed_args: dict) -> None:
         the cost of the files being parsed multiple times, which is slower.
     """
     # Unpack arguments
-    (cores, input_path, output_path, parsing_mode, fetch_taxa_auto, fetch_taxa_file,
-     no_progress, gzip) = map(parsed_args.get, ['cores', 'input', 'output', 'mode', 'fetch_taxa_auto',
-                                                'fetch_taxa_file', 'no_progress', 'gzip'])
+    (input_path, output_path, 
+     temp_path, parsing_mode,
+     fetch_taxa_auto, fetch_taxa_file, 
+     no_progress, gzip) = map(parsed_args.get, ['input', 'output', 'temp', 'mode', 
+                                                'fetch_taxa_auto', 'fetch_taxa_file', 'no_progress', 'gzip'])
+    temp_cds_db_path = temp_path / 'temp_cds_db.tsv.gz'
         
     # Parse the input files
-    cds_db = parse_files(input_path, parsing_mode, n_workers = cores, no_progress = no_progress)
+    cds_db = parse_files(input_path, parsing_mode, temp_cds_db_path = temp_cds_db_path, no_progress = no_progress)
     
     # Check for duplicate contig labels
     cds_db = check_duplicate_contigs(cds_db, parsing_mode)

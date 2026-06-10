@@ -235,6 +235,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
              'seq_clusters': args.seq_clusters.resolve()
              }
     # Check the most important paths
+    # Output folder can only exist already if forced
     try:
         paths['output_folder'].mkdir(parents = True)
     except FileExistsError as err:
@@ -244,17 +245,9 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
             msg = 'Output folder already exists! Rerun with -f to overwrite it.'
             LOG.error(msg)
             raise err
-            
-    if paths['temp_folder'] != Path(tempfile.gettempdir()):
-        try:
-            paths['temp_folder'].mkdir(parents = True)
-        except FileExistsError as err:
-            if args.force:
-                LOG.warning('Temporary folder already exists, but it will be overwritten.')
-            else:
-                msg = 'Temporary folder already exists! Rerun with -f to overwrite it.'
-                LOG.error(msg)
-                raise err
+    
+    # Temp folder will always be unique
+    paths['temp_folder'].mkdir(parents = True, exist_ok = True)
     paths['temp_folder'] = Path(tempfile.mkdtemp(dir = paths['temp_folder']))
     
     # Output flags
