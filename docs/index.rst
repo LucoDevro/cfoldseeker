@@ -14,9 +14,9 @@ cfoldseeker
 
 **The remote mode** leverages the FoldSeek webserver to search against the AlphaFoldDB, and uses several cross-referencing APIs (UniProt ID mapping, KEGG, ENA GenPept) to retrieve the genomic location of every hit.
 
-**The local mode** launches FoldSeek searches against a local structure database, and uses a genomic context database prepared from your sequences using its helper tool ``cfoldseeker-cds``.
+**The local mode** launches FoldSeek searches against a local structure database, and uses a genomic context database prepared from your local sequences using its helper tool ``cfoldseeker-cds``.
 
-**The local-clustered mode** facilitates searches against huge structure databases by searching against the representative proteins of a target database preclustered with ``mmseqs2``.
+**The local-clustered mode** facilitates searches against huge structure databases by searching against representative proteins identified through preclustering with ``mmseqs2``.
    
 If you find ``cfoldseeker`` useful, please cite:
 
