@@ -65,10 +65,10 @@ build\_cds\_db
    :undoc-members:
    :show-inheritance:
 
-export\_sequences
+extract\_sequences
 --------------------------------------
 
-.. automodule:: cfoldseeker.export_sequences
+.. automodule:: cfoldseeker.extract_sequences
    :members:
    :undoc-members:
    :show-inheritance:
