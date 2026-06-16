@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cfoldseeker"
-version = "0.1.0"
+version = "0.2.0"
 description = "Find gene clusters via protein structure similarity"
 
 authors = [
@@ -46,7 +46,7 @@ doc = [
 [project.scripts]
 cfoldseeker = "cfoldseeker.main:main"
 cfoldseeker-cds = "cfoldseeker.build_cds_db:main"
-cfoldseeker-seqs = "cfoldseeker.export_sequences:main"
+cfoldseeker-seqs = "cfoldseeker.extract_sequences:main"
 
 [tool.setuptools.packages.find]
 include = ["cfoldseeker*"]

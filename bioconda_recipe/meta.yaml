@@ -15,7 +15,7 @@ build:
   entry_points:
     - cfoldseeker = cfoldseeker.main:main
     - cfoldseeker-cds = cfoldseeker.build_cds_db:main
-    - cfoldseeker-seqs = cfoldseeker.export_sequences:main
+    - cfoldseeker-seqs = cfoldseeker.extract_sequences:main
   script: "{{ PYTHON }} -m pip install . -vvv --no-build-isolation --no-cache-dir"
   run_exports:
     - {{ pin_subpackage('cfoldseeker', max_pin="x") }}
@@ -46,8 +46,8 @@ about:
   license_family: MIT
   license_file: LICENSE
   summary: "Tool to find gene clusters using protein structure similarity"
-  doc_url: "https://github.com/LucoDevro/CAGEcleaner/wiki"
-  dev_url: "https://github.com/LucoDevro/CAGEcleaner"
+  doc_url: "https://cfoldseeker.readthedocs.io/en/latest/"
+  dev_url: "https://github.com/LucoDevro/cfoldseeker"
 
 extra:
   recipe-maintainers:
