@@ -227,9 +227,9 @@ def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in
         
         # Get filename
         if in_package:
-            filename = file.parent.name
+            filelabel = file.parent.name
         else:
-            filename = file.stem
+            filelabel = file.with_suffix('.gz').with_suffix('').with_suffix('').name
         
         # Get taxon id
         first_source_feature = [feat for feat in records[0].features if feat.type == 'source'][0]
@@ -253,7 +253,7 @@ def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in
                         'coords': ','.join(coord_intervals),
                         'strand': '{0:+}'.format(feature.location.strand)[0],
                         'taxon_id': taxon_id,
-                        'filelabel': filename,
+                        'filelabel': filelabel,
                         }
                     
                     cds_records.append(cds_record)
@@ -291,8 +291,8 @@ def _add_one_bakta_genbank_to_db(numbered_filepath: tuple, writer: DictWriter) -
         # First parse the Genbank
         records = list(SeqIO.parse(handle, 'genbank'))
         
-        # Get filename
-        filename = file.stem
+        # Get filelabel
+        filelabel = file.with_suffix('.gz').with_suffix('').with_suffix('').name
         
         # Assign generic taxon id
         taxon_id = numbered_filepath[0]
@@ -313,7 +313,7 @@ def _add_one_bakta_genbank_to_db(numbered_filepath: tuple, writer: DictWriter) -
                         'coords': ','.join(coord_intervals),
                         'strand': '{0:+}'.format(feature.location.strand)[0],
                         'taxon_id': taxon_id,
-                        'filelabel': filename,
+                        'filelabel': filelabel,
                         }
                     
                     cds_records.append(cds_record)
