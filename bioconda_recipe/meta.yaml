@@ -7,10 +7,10 @@ package:
 
 source:
   url: "https://pypi.org/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz"
-  sha256: d5a395ca1615573919af920011a1e6bbd877103296e8739fdc494f7f8229bf37
+  sha256: 79e867556dae491b8585a62303bd84f37cea745e2aed6c98afca352e58c93d8b
 
 build:
-  number: 0
+  number: 1
   noarch: python
   entry_points:
     - cfoldseeker = cfoldseeker.main:main
@@ -41,12 +41,12 @@ test:
     - cfoldseeker -h
 
 about:
-  home: "https://github.com/LucoDevro/CAGEcleaner"
+  home: "https://github.com/LucoDevro/cfoldseeker"
   license: MIT
   license_family: MIT
   license_file: LICENSE
   summary: "Tool to find gene clusters using protein structure similarity"
-  doc_url: "https://cfoldseeker.readthedocs.io/en/latest/"
+  doc_url: "https://cfoldseeker.readthedocs.io/en/stable/"
   dev_url: "https://github.com/LucoDevro/cfoldseeker"
 
 extra:
