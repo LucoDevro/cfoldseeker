@@ -639,6 +639,11 @@ class Search(ABC):
         Returns:
             Session (cblaster.Session): Session holding all information about the identified clusters.
         """
+        
+        VALID_AMINO_ACIDS = ('ARG', 'HIS', 'LYS', 'ASP', 'GLU', 'SER', 'THR', 
+                             'ASN', 'GLN', 'CYS', 'GLY', 'PRO', 'ALA', 'VAL',
+                             'ILE', 'LEU', 'MET', 'PHE', 'TYR', 'TRP')
+        
         def get_sequence_length_from_cif(file: Path) -> int:
             """
             Determine the CDS sequence length from a CIF structure file.
@@ -653,8 +658,13 @@ class Search(ABC):
                 int: Sequence length in base pairs (number of residues * 3).
             """
             structure = MMCIF2Dict(file)
-            res_ids = [int(i) for i in structure['_entity_poly_seq.num']]
-            return max(res_ids)*3 # codon triplets
+            residues = set(zip(structure['_atom_site.label_comp_id'],
+                               structure['_atom_site.label_seq_id']))
+            
+            # Only count actual amino acids
+            residues = [p for p in residues if p[0] in VALID_AMINO_ACIDS]
+            
+            return len(residues)*3 # codon triplets
         
         def get_clusters_by_id(self, nbs: list) -> list:
             """
