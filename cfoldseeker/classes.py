@@ -661,7 +661,7 @@ class Search(ABC):
             residues = set(zip(structure['_atom_site.label_comp_id'],
                                structure['_atom_site.label_seq_id']))
             
-            # Only count actual amino acids
+            # Only count valid amino acids
             residues = [p for p in residues if p[0] in VALID_AMINO_ACIDS]
             
             return len(residues)*3 # codon triplets
