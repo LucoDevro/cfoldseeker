@@ -253,14 +253,14 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
     paths['temp_folder'] = Path(tempfile.mkdtemp(dir = paths['temp_folder']))
     
     # Check for valid query CIF files
-    VALID_AMINO_ACIDS = ('ARG', 'HIS', 'LYS', 'ASP', 'GLU', 'SER', 'THR', 
+    CANONICAL_AMINO_ACIDS = {'ARG', 'HIS', 'LYS', 'ASP', 'GLU', 'SER', 'THR', 
                          'ASN', 'GLN', 'CYS', 'GLY', 'PRO', 'ALA', 'VAL',
-                         'ILE', 'LEU', 'MET', 'PHE', 'TYR', 'TRP')
+                         'ILE', 'LEU', 'MET', 'PHE', 'TYR', 'TRP'}
     for query in paths['query'].values():
         struct = MMCIF2Dict(query)
         if 'ATOM' not in struct['_atom_site.group_PDB']:
             raise ValueError(f"Query file {query.name} does not contain atoms!")
-        if not(set(VALID_AMINO_ACIDS) <= set(struct['_atom_site.label_comp_id'])):
+        if not(CANONICAL_AMINO_ACIDS & set(struct['_atom_site.label_comp_id'])):
             raise ValueError(f"Query file {query.name} does not contain any canonical amino acid!")
         if len(set(struct['_atom_site.label_asym_id'])) != 1:
             raise ValueError(f"Query file {query.name} contains more than one peptide chain!")

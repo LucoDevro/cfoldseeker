@@ -326,7 +326,8 @@ class Cluster:
                 'length': self.length,
                 'scaff': self.scaff,
                 'taxon_id': self.taxon_id,
-                'taxon_name': self.taxon_name}
+                'taxon_name': self.taxon_name,
+                'filelabel': self.filelabel}
     
 
 class Search(ABC):
@@ -626,8 +627,8 @@ class Search(ABC):
         # Then the clusters
         LOG.debug('Writing gene cluster table')
         all_cluster_data = [cl.as_dict() for cl in self.clusters]
-        all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'score', 'scaff',
-                                                                       'strand', 'taxon_name', 'taxon_id', 'filelabel'])
+        all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'score', 
+                                                                       'scaff', 'taxon_name', 'taxon_id', 'filelabel'])
         all_cluster_data_df.write_csv(output_folder / 'clusters.tsv', include_header = True, separator = "\t")
         
         return None
@@ -646,7 +647,7 @@ class Search(ABC):
             Session (cblaster.Session): Session holding all information about the identified clusters.
         """
         
-        VALID_AMINO_ACIDS = ('ARG', 'HIS', 'LYS', 'ASP', 'GLU', 'SER', 'THR', 
+        CANONICAL_AMINO_ACIDS = ('ARG', 'HIS', 'LYS', 'ASP', 'GLU', 'SER', 'THR', 
                              'ASN', 'GLN', 'CYS', 'GLY', 'PRO', 'ALA', 'VAL',
                              'ILE', 'LEU', 'MET', 'PHE', 'TYR', 'TRP')
         
@@ -667,8 +668,8 @@ class Search(ABC):
             residues = set(zip(structure['_atom_site.label_comp_id'],
                                structure['_atom_site.label_seq_id']))
             
-            # Only count valid amino acids
-            residues = [p for p in residues if p[0] in VALID_AMINO_ACIDS]
+            # Only count canonical amino acids
+            residues = [p for p in residues if p[0] in CANONICAL_AMINO_ACIDS]
             
             return len(residues)*3 # codon triplets
         
