@@ -9,6 +9,8 @@ import polars as pl
 import networkx as nx
 from abc import ABC, abstractmethod
 from pathlib import Path
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from cblaster.classes import Session
 from cblaster.plot import plot_session
@@ -438,20 +440,22 @@ class Search(ABC):
         ## and filter out the ones failing the intergenic threshold
         ## and filter out self-hits as these are not genuine collocalised genes
         LOG.info("Calculating intergenic distances")
-        close_groups = []
-        for _, hits in scaff_groups.items():
-            # Calculate the intergenetic distances and find the self-hits
-            pairs_to_test = list(it.combinations(hits, 2))
-            self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
-            dists = {pair: Hit.intergenic_distance(*pair) for pair in pairs_to_test}
-            
-            # Apply the filtering
-            dists = {k:v for k,v in dists.items() if v <= max_gap} # apply max gap criterium
-            dists = {k:v for k,v in dists.items() if not self_hits[k]} # filter out self-hits
-            
-            # Collect if there's a group of proximal hits on this scaffold
-            if len(dists) > 0:
-                close_groups.append(list(dists.keys()))
+        
+        with logging_redirect_tqdm(loggers = [LOG]):
+            close_groups = []
+            for hits in tqdm(list(scaff_groups.values()), leave = False, disable = self.params['no_progress']):
+                # Calculate the intergenetic distances and find the self-hits
+                pairs_to_test = list(it.combinations(hits, 2))
+                self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
+                dists = {pair: Hit.intergenic_distance(*pair) for pair in pairs_to_test}
+                
+                # Apply the filtering
+                dists = {k:v for k,v in dists.items() if v <= max_gap} # apply max gap criterium
+                dists = {k:v for k,v in dists.items() if not self_hits[k]} # filter out self-hits
+                
+                # Collect if there's a group of proximal hits on this scaffold
+                if len(dists) > 0:
+                    close_groups.append(list(dists.keys()))
                 
         ## Abort if there are no proximal hit groups
         if len(close_groups) == 0:
@@ -477,57 +481,59 @@ class Search(ABC):
         ## Identify the clusters by finding chains of distance pairs on the same scaffold using a directed network graph
         ## Account for multi-hits and -crossrefs by generating all possible hit chains when encountering pairs on the same genomic location
         LOG.info("Identifying gene clusters from chains of distance pairs passing cluster criteria")
-        clusters = []
-        for cg in close_groups:
-            # Order every hit pair so from up- to downstream
-            reordered_cg = [sorted(pair, key = operator.methodcaller('start')) for pair in cg]
-            
-            # Identify the hit chains
-            G = nx.DiGraph()
-            G.add_edges_from(reordered_cg)
-            chains = list(nx.weakly_connected_components(G))
-            
-            # Then, identify all possible chains by generating chains for all multi-hit or -crossref combinations
-            all_clusters = []
-            for chain in chains:
-                subG = G.subgraph(chain)
+        
+        with logging_redirect_tqdm(loggers = [LOG]):
+            clusters = []
+            for cg in tqdm(close_groups, leave = False, disable = self.params['no_progress']):
+                # Order every hit pair so from up- to downstream
+                reordered_cg = [sorted(pair, key = operator.methodcaller('start')) for pair in cg]
                 
-                # Identify all possible hits to start a chain and to end a chain
-                min_start = min([h.start() for h in chain])
-                max_start = max([h.start() for h in chain])
-                firsts = [h for h in chain if h.start() == min_start]
-                lasts = [h for h in chain if h.start() == max_start]
+                # Identify the hit chains
+                G = nx.DiGraph()
+                G.add_edges_from(reordered_cg)
+                chains = list(nx.weakly_connected_components(G))
                 
-                # Generate all possible hit chains
-                all_paths_this_chain = [list(nx.all_simple_paths(subG, first, last)) for first in firsts for last in lasts]
-                all_paths_this_chain = list(it.chain(*all_paths_this_chain))
-                # Keep only the longest paths (discard the paths with shortcuts skipping a gene)
-                max_path_length = max([len(p) for p in all_paths_this_chain])
-                all_paths_this_chain = [p for p in all_paths_this_chain if len(p) == max_path_length]
+                # Then, identify all possible chains by generating chains for all multi-hit or -crossref combinations
+                all_clusters = []
+                for chain in chains:
+                    subG = G.subgraph(chain)
+                    
+                    # Identify all possible hits to start a chain and to end a chain
+                    min_start = min([h.start() for h in chain])
+                    max_start = max([h.start() for h in chain])
+                    firsts = [h for h in chain if h.start() == min_start]
+                    lasts = [h for h in chain if h.start() == max_start]
+                    
+                    # Generate all possible hit chains
+                    all_paths_this_chain = [list(nx.all_simple_paths(subG, first, last)) for first in firsts for last in lasts]
+                    all_paths_this_chain = list(it.chain(*all_paths_this_chain))
+                    # Keep only the longest paths (discard the paths with shortcuts skipping a gene)
+                    max_path_length = max([len(p) for p in all_paths_this_chain])
+                    all_paths_this_chain = [p for p in all_paths_this_chain if len(p) == max_path_length]
+                    
+                    # Create Cluster objects from these longest paths
+                    all_clusters_this_chain = [Cluster(p) for p in all_paths_this_chain]
+                    
+                    # Apply intra-cluster filtering criteria
+                    # Minimum number of hits
+                    all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain if len(cl.hits) >= min_hits]
+                    # Minimum number of covered queries
+                    covered_queries = {cl: {h.query for h in cl.hits} for cl in all_clusters_this_chain_filt}
+                    all_clusters_this_chain_filt = [cl for cl,cov_qrs in covered_queries.items()
+                                                    if len(cov_qrs) >= min_covered_queries and set(require) <= cov_qrs]
+                    # Maximum cluster length
+                    all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain_filt if cl.length <= max_length]
+                    
+                    # Keep only the best-scoring cluster layout if not all cluster layouts are requested
+                    if not(all_layouts) and len(all_clusters_this_chain_filt) > 0:
+                        all_clusters_this_chain_filt = [max(all_clusters_this_chain_filt, key = operator.attrgetter('score'))]
+                    
+                    # Collect
+                    all_clusters.append(all_clusters_this_chain_filt)
                 
-                # Create Cluster objects from these longest paths
-                all_clusters_this_chain = [Cluster(p) for p in all_paths_this_chain]
-                
-                # Apply intra-cluster filtering criteria
-                # Minimum number of hits
-                all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain if len(cl.hits) >= min_hits]
-                # Minimum number of covered queries
-                covered_queries = {cl: {h.query for h in cl.hits} for cl in all_clusters_this_chain_filt}
-                all_clusters_this_chain_filt = [cl for cl,cov_qrs in covered_queries.items()
-                                                if len(cov_qrs) >= min_covered_queries and set(require) <= cov_qrs]
-                # Maximum cluster length
-                all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain_filt if cl.length <= max_length]
-                
-                # Keep only the best-scoring cluster layout if not all cluster layouts are requested
-                if not(all_layouts) and len(all_clusters_this_chain_filt) > 0:
-                    all_clusters_this_chain_filt = [max(all_clusters_this_chain_filt, key = operator.attrgetter('score'))]
-                
-                # Collect
-                all_clusters.append(all_clusters_this_chain_filt)
-            
-            # Save the clusters for this genomic neighbourhood
-            all_clusters = list(it.chain(*all_clusters))
-            clusters.append(all_clusters)
+                # Save the clusters for this genomic neighbourhood
+                all_clusters = list(it.chain(*all_clusters))
+                clusters.append(all_clusters)
         
         # Flatten out all results
         clusters = list(it.chain(*clusters))
