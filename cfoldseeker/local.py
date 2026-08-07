@@ -147,10 +147,13 @@ class LocalSearch(Search):
                "--min-seq-id", str(self.params['min_seqid']),
                '-e', str(self.params['max_eval']),
                '--threads', str(self.params['cores']),
-               '--exhaustive-search', '1'
+               '--gpu', str(int(self.params['gpu'])),
+               '--exhaustive-search', '1',
+               '--prefilter-mode', '1',
                ]
         
         # Launching search process
+        LOG.info('Running FoldSeek')
         LOG.debug(f'Running command: {" ".join(cmd)}')
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         

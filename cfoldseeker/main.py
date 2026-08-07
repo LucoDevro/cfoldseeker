@@ -97,7 +97,7 @@ def create_parser() -> argparse.ArgumentParser:
     args_remote.add_argument('-w', '--max-workers', dest = "max_workers", type = int, default = 1, help = "Maximum number of workers to query the remote servers (FoldSeek, KEGG, ENA) (default: 1)")
     
     args_local = parser.add_argument_group('Local-specific search options')
-    args_local.add_argument('-ldb', '--local-db', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
+    args_local.add_argument('--gpu', dest = 'gpu', default = False, action = "store_true", help = "Use GPU acceleration for the FoldSeek search (default: False).")
     args_local.add_argument('-cdb', '--cds-coords-db', dest = 'cds_db_path', type = Path, default = Path('local_cds_db.gz'), help = "Path of the CDS coordinates DB (default: local_cds_db.gz).")
     
     args_local_clustered = parser.add_argument_group('Local-clustered-specific search options')
@@ -211,6 +211,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
               'verbosity': args.verbosity,
               'no_progress': args.no_progress,
               'max_workers': args.max_workers,
+              'gpu': args.gpu,
               'max_eval': args.max_eval,
               'min_score': args.min_score,
               'min_seqid': args.min_seqid,
