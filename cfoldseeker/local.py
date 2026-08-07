@@ -324,6 +324,9 @@ class LocalSearch(Search):
         
         Returns:
             None
+            
+        Mutates:
+            self.hits: Instantiates the list of identified Hit objects.
         """
         # Parses FoldSeek results and applies hit-level filtering
         parsed_results = self.parse_foldseek_results()
@@ -331,6 +334,26 @@ class LocalSearch(Search):
         # Adds genomic context and instantiates Hit objects
         self.collect_hits(parsed_results)
         
+        return None
+    
+    
+    def search_homologs(self) -> None:
+        """
+        Search structural homologs of each query protein.
+        
+        Launches a FoldSeek call in case no earlier results table has been supplied.
+        
+        Returns:
+            None
+        """
+        reuse_file = self.params['reuse_search']
+        if reuse_file and reuse_file.is_file():
+            LOG.info('Reusing earlier FoldSeek search result')
+            shutil.copy(self.params['reuse_search'], self.TEMP_DIR / 'foldseek_result.txt')
+        else:
+            LOG.info('Launching FoldSeek search')
+            self.run_foldseek()
+            
         return None
     
     
@@ -346,8 +369,8 @@ class LocalSearch(Search):
             None
         """
         
-        LOG.info('STARTING PART 1: Executing FoldSeek search')
-        self.run_foldseek()
+        LOG.info('STARTING PART 1: Searching homologs')
+        self.search_homologs()
         LOG.info("FINISHED PART 1")
         
         LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")

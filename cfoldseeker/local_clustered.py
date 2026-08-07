@@ -161,8 +161,8 @@ class LocalClusteredSearch(LocalSearch):
             None
         """
         
-        LOG.info('STARTING PART 1: Executing FoldSeek search')
-        self.run_foldseek()
+        LOG.info('STARTING PART 1: Searching homologs')
+        self.search_homologs()
         LOG.info("FINISHED PART 1")
         
         LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")

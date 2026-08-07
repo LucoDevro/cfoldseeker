@@ -3,6 +3,7 @@
 
 import re
 import json
+import shutil
 import logging
 import warnings
 import polars as pl
@@ -197,6 +198,39 @@ class RemoteSearch(Search):
         return None
     
     
+    def search_homologs(self):
+        """
+        Search structural homologs of each query protein.
+        
+        Launches a FoldSeek webserver call in case no earlier results have been supplied.
+        
+        Returns:
+            None
+            
+        Mutates:
+            self.hits: Populates a temporary dictionary with parsed result json files
+        """
+        reuse_files = self.params['reuse_search']
+        if reuse_files and reuse_files.is_dir():
+            LOG.info('Reusing earlier FoldSeek search results')
+            
+            # Reconstruct the unparsed hits attribute as constructed by run_foldseek()
+            all_results = {}
+            for results_file in reuse_files.glob('*.json'):
+                shutil.copy(results_file, self.TEMP_DIR) # Copy results file to temp folder for consistency
+                query = results_file.stem.split('_')[-1] # Read query name from filename
+                with open(results_file, 'r') as handle:
+                    result = json.load(handle)
+                all_results[query] = result
+                
+            self.hits = all_results
+        else:
+            LOG.info('Launching FoldSeek search')
+            self.run_foldseek()
+            
+        return None
+    
+    
     def passes_criteria(self, hit: Hit):
         """
         Check if a hit passes the criteria set for this search.
@@ -228,6 +262,9 @@ class RemoteSearch(Search):
             
         Raises:
             RuntimeError: If the hit list is empty after applying the criteria
+            
+        Mutates:
+            self.hits: Instantiates the list of identified Hit objects.
             
         Note:
             Logs a warning when there are no hits for a certain query and DB pair.
@@ -703,8 +740,8 @@ class RemoteSearch(Search):
             None
         """
         
-        LOG.info("STARTING PART 1: Executing FoldSeek search")
-        self.run_foldseek()
+        LOG.info("STARTING PART 1: Searching homologs")
+        self.search_homologs()
         LOG.info('FINISHED PART 1')
         
         LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")

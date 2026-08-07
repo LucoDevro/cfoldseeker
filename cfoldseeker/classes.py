@@ -392,6 +392,17 @@ class Search(ABC):
         pass
     
     @abstractmethod
+    def search_homologs(self):
+        """
+        Search structural homologs of each query protein, potentially avoiding a
+        FoldSeek call by reusing earlier results.
+        
+        Note:
+            This method must be implemented by subclasses to orchestrate the homolog
+            search workflow.
+        """
+    
+    @abstractmethod
     def run_foldseek(self):
         """
         Run the FoldSeek search tool.

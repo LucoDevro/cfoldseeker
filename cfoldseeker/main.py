@@ -62,7 +62,7 @@ def create_parser() -> argparse.ArgumentParser:
     args_general.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")
     
     args_io = parser.add_argument_group('Inputs and outputs')
-    args_io.add_argument('-q', '--query', dest = 'query_folder', required = True, type = Path, help = "Path of the folder containing the query proteins.")
+    args_io.add_argument('-q', '--query', dest = 'query_folder', type = Path, default = Path('.'), help = "Path of the folder containing the query proteins.")
     args_io.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('.'), help = "Output directory (default: current location)")
     args_io.add_argument('-t', '--temp', dest = "temp", type = Path, default = Path(tempfile.gettempdir()), help = "Path to store temporary files (default: your OS's default temporary directory).")
     args_io.add_argument('--no-tables', dest = 'output_tables', default = True, action = 'store_false', help = "Don't write overview tables (default: false).")
@@ -98,6 +98,10 @@ def create_parser() -> argparse.ArgumentParser:
     
     args_local = parser.add_argument_group('Local-specific search options')
     args_local.add_argument('--gpu', dest = 'gpu', default = False, action = "store_true", help = "Use GPU acceleration for the FoldSeek search (default: False).")
+    args_local_reuse = args_local.add_mutually_exclusive_group()
+    args_local_reuse.add_argument('-ldb', '--local-db', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
+    args_local_reuse.add_argument('--reuse-search', dest = 'reuse_search', type = Path, default = None,
+                            help = "Earlier FoldSeek result to reuse (local modes: text file; remote mode: folder of webserver json's) (default: None).")
     args_local.add_argument('-cdb', '--cds-coords-db', dest = 'cds_db_path', type = Path, default = Path('local_cds_db.gz'), help = "Path of the CDS coordinates DB (default: local_cds_db.gz).")
     
     args_local_clustered = parser.add_argument_group('Local-clustered-specific search options')
@@ -154,8 +158,14 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
         raise ValueError('Invalid search mode. Possible choices: "local" and "remote".')
     if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
         raise ValueError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
-    if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
-        raise ValueError('Query folder path does not exist or does not contain cif files.')
+    # This check does not matter if there are results to be reused
+    if not(args.reuse_search):
+        if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
+            raise ValueError('Query folder path does not exist or does not contain cif files.')
+    # Otherwise, check whether the supplied reuse path is valid
+    else:
+        if not(args.reuse_search.is_dir() or args.reuse_search.is_file()):
+            raise ValueError('Reuse path does not exist.')
     if not(args.cores > 0):
         raise ValueError('Number of cores must be strictly positive.')
     if not(args.max_workers > 0): 
@@ -189,15 +199,19 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
                 raise ValueError("UniProt mapping table path does not exist or is not a file.")
         case 'local':
             db = ["local"]
-            if not(args.local_db_path.is_file()):
-                raise ValueError("Local FoldSeek DB does not exist.")
+            # This check does not matter if there are results to be reused
+            if not(args.reuse_search):
+                if not(args.local_db_path.is_file()):
+                    raise ValueError("Local FoldSeek DB does not exist.")
             if not skip_context_table_check:
                 if not(args.cds_db_path.is_file()):
                     raise ValueError("CDS mapping table path does not exist or is not a file.")
         case 'local_clustered':
             db = ['local']
-            if not(args.local_db_path.is_file()):
-                raise ValueError("Local FoldSeek DB does not exist.")
+            # This check does not matter if there are results to be reused
+            if not(args.reuse_search):
+                if not(args.local_db_path.is_file()):
+                    raise ValueError("Local FoldSeek DB does not exist.")
             if not(args.seq_clusters.is_file()):
                 raise ValueError("MMseqs2 clustering table does not exist.")
             if not skip_context_table_check:
@@ -212,6 +226,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
               'no_progress': args.no_progress,
               'max_workers': args.max_workers,
               'gpu': args.gpu,
+              'reuse_search': args.reuse_search,
               'max_eval': args.max_eval,
               'min_score': args.min_score,
               'min_seqid': args.min_seqid,
