@@ -102,12 +102,12 @@ class LocalClusteredSearch(LocalSearch):
         LOG.info('Expanding the hit set with sequence cluster members')
         
         # Identify which genes remained after filtering
-        filtered_genes = results.select('target').unique()
+        filtered_genes = results.select('target').unique().to_series().to_list() # List conversion for efficient filtering down
         
         # Prefilter clustering table for present genes
         LOG.info('Prefiltering sequence clustering table')
-        seq_clust_filt = self.seq_clust.filter(pl.col('representative').is_in(filtered_genes['target']))
-        seq_clust_filt = seq_clust_filt.collect() # Materialise for join efficiency
+        seq_clust_filt = self.seq_clust.filter(pl.col('representative').is_in(filtered_genes))
+        seq_clust_filt = seq_clust_filt.collect() # Materialise for efficiency of the next join
         
         # Include all sequence cluster members by joining with the MMseqs2 clustering table
         LOG.info('Adding sequence cluster members')

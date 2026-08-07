@@ -263,12 +263,12 @@ class LocalSearch(Search):
         """
         ## Add genomic context from CDS DB
         # Identify which genes remained after filtering
-        filtered_genes = results.select('target').unique()
+        filtered_genes = results.select('target').unique().to_series().to_list() # List conversion for efficient filtering down
         
         # Prefilter context DB for these genes
         LOG.info('Prefiltering context DB')
-        coord_db_filt = self.coord_db.filter(pl.col('gene_tag').is_in(filtered_genes['target']))
-        coord_db_filt = coord_db_filt.collect() # Materialise for join efficiency
+        coord_db_filt = self.coord_db.filter(pl.col('gene_tag').is_in(filtered_genes))
+        coord_db_filt = coord_db_filt.collect() # Materialise for efficiency of the next join
         
         ## Join with context DB
         LOG.info('Fetching CDS coordinates from context DB')
