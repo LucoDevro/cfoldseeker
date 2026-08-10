@@ -60,8 +60,8 @@ class LocalSearch(Search):
             with columns: gene_tag, name, contig, strand, coords, taxon_id,
             taxon_name.
     """
-    def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
-                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, db_path, coord_db_path, params = None, hits = None, clusters = None,
+                 output_flags = None, output_folder = None, temp_folder = None):
         """
         Initialise a LocalSearch instance with database paths and parameters.
         

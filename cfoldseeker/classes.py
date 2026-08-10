@@ -47,9 +47,9 @@ class Hit:
         strand (str): DNA strand the encoding gene is located on ('+' or '-').
     """
     
-    def __init__(self, db_id, query, crossref_id = [], crossref_method = '', name = '', 
+    def __init__(self, db_id, query, crossref_id = None, crossref_method = '', name = '', 
                  taxon_name = '', taxon_id = 0, db = "", filelabel = "", evalue = 1, score = 0, 
-                 seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = [], strand = ''):
+                 seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = None, strand = ''):
         """
         Initialise a Hit object with FoldSeek search results and genomic information.
         
@@ -78,7 +78,7 @@ class Hit:
         self.db_id: str = db_id #ID of the hit in its DB
         self.db: str = db #Structure database the hit was found in
         self.filelabel: str = filelabel #Filelabel of the local files the hit's sequences are encoded in case of local DBs
-        self.crossref_id: list = crossref_id #ID used for crossreffing (either ID from KEGG or GenPept)
+        self.crossref_id: list = crossref_id if crossref_id else [] #ID used for crossreffing (either ID from KEGG or GenPept)
         self.crossref_method: str = crossref_method #Method used for crossreffing (either KEGG or GenPept)
         
         # FoldSeek hit properties
@@ -93,7 +93,7 @@ class Hit:
         
         # Genomic properties
         self.scaff: str = scaff #RefSeq or GenBank ID of the scaffold encoding the hit
-        self.coords: list = coords #list of genomic coordinates of the encoding gene's exons
+        self.coords: list = coords if coords else [] #list of genomic coordinates of the encoding gene's exons
         self.strand: str = strand #DNA strand the encoding gene is part from
         
     
@@ -349,13 +349,13 @@ class Search(ABC):
         OUTPUT_DIR (Path): Directory for output files.
         TEMP_DIR (Path): Directory for temporary files.
     """
-    def __init__(self, query, params = {}, hits = [], clusters = [], output_flags = {},
-                 output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, params = None, hits = None, clusters = None, output_flags = None,
+                 output_folder = None, temp_folder = None):
         """
         Initialise a Search object.
         
         Args:
-            query (list): List of query file paths or query identifiers.
+            query (dict): Dictionary of query file paths or query identifiers.
             params (dict, optional): Search parameters dictionary. Defaults to {}.
             hits (list, optional): Pre-loaded Hit objects. Defaults to [].
             clusters (list, optional): Pre-loaded Cluster objects. Defaults to [].
@@ -363,14 +363,14 @@ class Search(ABC):
             output_folder (Path, optional): Output directory path. Defaults to '.'.
             temp_folder (Path, optional): Temporary directory path. Defaults to '.'.
         """
-        self.query: list = query # list of query filepaths
-        self.params: dict = params # dictionary containing the search configuration
-        self.hits: list = hits # list of Hit objects
-        self.clusters: list = clusters # list of Cluster objects
-        self.output_flags: dict = output_flags # dictionary flagging the output files to be generated
+        self.query: dict = query # dictionary of query filepaths
+        self.params: dict = params if params else {} # dictionary containing the search configuration
+        self.hits: list = hits if hits else [] # list of Hit objects
+        self.clusters: list = clusters if clusters else [] # list of Cluster objects
+        self.output_flags: dict = output_flags if output_flags else {} # dictionary flagging the output files to be generated
         
-        self.OUTPUT_DIR: Path = output_folder
-        self.TEMP_DIR: Path = temp_folder
+        self.OUTPUT_DIR: Path = output_folder if output_folder else Path('.')
+        self.TEMP_DIR: Path = temp_folder if temp_folder else Path('.')
         LOG.debug(f'Created temporary folder at {self.TEMP_DIR}.')
         
         return None

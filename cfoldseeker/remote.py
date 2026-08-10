@@ -46,8 +46,8 @@ class RemoteSearch(Search):
         Local: Sister class providing the search and parsing capabilities for local database searches
     """
     
-    def __init__(self, query, mapping_table_path, params = {}, hits = [], clusters = [], 
-                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, mapping_table_path, params = None, hits = None, clusters = None, 
+                 output_flags = None, output_folder = None, temp_folder = None):
         """
         Initialise a RemoteSearch instance.
         
@@ -643,7 +643,7 @@ class RemoteSearch(Search):
                         all_new_scaffold_ids = [l.rstrip() for l in handle.readlines()]
                     break
                 except:
-                    if attempt < max_attempts:
+                    if attempt+1 < max_attempts:
                         LOG.warning(f'Failed getting version digits from NCBI in attempt {attempt+1}. Max. attempts: {max_attempts}')
                     else:
                         msg = f'Failed getting version digits from NCBI in {max_attempts} attempts!'

@@ -36,9 +36,9 @@ class LocalClusteredSearch(LocalSearch):
         representative of every sequence in the target database. These representatives
         then form the FoldSeek target structure database.
     """
-    def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
-                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.'),
-                 seq_clust_tsv = Path('.')):
+    def __init__(self, query, db_path, coord_db_path, seq_clust_tsv, params = None, 
+                 hits = None, clusters = None, output_flags = None, 
+                 output_folder = None, temp_folder = None):
         """
         Initialise a LocalClusteredSearch instance with database paths and parameters.
         
@@ -50,6 +50,7 @@ class LocalClusteredSearch(LocalSearch):
             db_path: Path to the local FoldSeek protein structure target database.
             coord_db_path: Path to the CDS coordinates database file (tab-separated,
                 no header).
+            seq_clust_tsv: Path to the MMseqs2 clustering table.
             params: Dictionary of search parameters (e.g., min_seqid, max_eval,
                 min_score). Defaults to empty dict.
             hits: List of Hit objects from previous searches. Defaults to empty list.
@@ -59,8 +60,6 @@ class LocalClusteredSearch(LocalSearch):
             output_folder: Path to folder for output files. Defaults to current
                 directory.
             temp_folder: Path to folder for temporary files. Defaults to current
-                directory.
-            seq_clust_tsv: Path to the MMseqs2 clustering table. Defaults to current
                 directory.
                 
         Note:
