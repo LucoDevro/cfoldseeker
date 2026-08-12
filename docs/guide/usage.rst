@@ -34,6 +34,10 @@ Local mode
 ~~~~~~~~~~
 The local mode requires from you a set of query protein structures, a genomic context table made using ``cfoldseeker-cds``, and a FoldSeek target database.
 
+.. warning::
+
+   Make sure your filepaths point to a fast harddrive! ``cfoldseeker`` uses the disk intensely in local mode, so don't make it an annoying bottleneck!
+
 Prior work
 ^^^^^^^^^^
 **1.** Get structural models as CIF files of your query proteins, either experimentally or computationally (AlphaFold, ESMFold, OpenFold). Collect them all in one folder ``query_models``.
@@ -104,7 +108,7 @@ Then you can build the FoldSeek DB directly from your protein sequences in ``inp
 
 The search
 ^^^^^^^^^^
-Run ``cfoldseeker`` in local mode using FoldSeek DB ``target_DB``, and context DB ``cds_db.gz``. Save results in a new folder ``results``.
+Run ``cfoldseeker`` in local mode using FoldSeek DB ``target_DB``, and context DB ``cds_db.gz``. Save results in a new folder ``results``. Add ``--gpu 1`` to use a GPU-accelerated search.
 
 .. code-block:: bash
 
@@ -113,6 +117,10 @@ Run ``cfoldseeker`` in local mode using FoldSeek DB ``target_DB``, and context D
 Local-clustered mode
 ~~~~~~~~~~~~~~~~~~~~
 The local-clustered mode requires a set of query protein structures, a genomic context table made using ``cfoldseeker-cds``, a MMseqs2 clustering TSV file, and a FoldSeek target database of the representative proteins.
+
+.. warning::
+
+   Make sure your filepaths point to a fast harddrive! ``cfoldseeker`` uses the disk intensely in local mode, so don't make it an annoying bottleneck!
 
 Prior work
 ^^^^^^^^^^
@@ -136,7 +144,7 @@ This will, among others, produce a fasta file ``clustered_rep_seq.fasta`` contai
 
 The search
 ^^^^^^^^^^
-Run ``cfoldseeker`` in local_clustered mode using FoldSeek DB ``target_DB``, context DB ``cds_db.gz``, and preclustering table ``clustered_table.tsv``. Save results in a new folder ``results``.
+Run ``cfoldseeker`` in local_clustered mode using FoldSeek DB ``target_DB``, context DB ``cds_db.gz``, and preclustering table ``clustered_table.tsv``. Save results in a new folder ``results``. Add ``--gpu 1`` to use a GPU-accelerated search.
 
 .. code-block:: bash
 
@@ -194,29 +202,29 @@ Cluster table
 ^^^^^^^^^^^^^^
 The ``clusters.tsv`` file is a tab-separated file summarising the properties of the identified clusters. It comprises the 10 columns described below.
 
-+-------------+------------------------------------------------------+
-| **Column**  | **Description**                                      |
-+-------------+------------------------------------------------------+
-| number      | Arbitrary unique number                              |
-+-------------+------------------------------------------------------+
-| hits        | IDs of the hits part of this cluster                 |
-+-------------+------------------------------------------------------+
-| start       | Starting coordinate of the entire cluster            |
-+-------------+------------------------------------------------------+
-| end         | End coordinate of the entire cluster                 |
-+-------------+------------------------------------------------------+
-| length      | Sum of the lengths of all exons part of this cluster |
-+-------------+------------------------------------------------------+
-| score       | Sum of the Foldseek bitscores of all cluster members |
-+-------------+------------------------------------------------------+
-| scaff       | ID of the scaffold/contig harbouring this cluster    |
-+-------------+------------------------------------------------------+
-| strand      | Strand location of the cluster                       |
-+-------------+------------------------------------------------------+
-| taxon_name  | Name of the taxon (e.g. NCBI Assembly ID)            |
-+-------------+------------------------------------------------------+
-| taxon_id    | Unique taxon ID (e.g. NCBI taxon ID)                 |
-+-------------+------------------------------------------------------+
++-------------+------------------------------------------------------------------------+
+| **Column**  | **Description**                                                        |
++-------------+------------------------------------------------------------------------+
+| number      | Arbitrary unique number                                                |
++-------------+------------------------------------------------------------------------+
+| hits        | IDs of the hits part of this cluster                                   |
++-------------+------------------------------------------------------------------------+
+| start       | Starting coordinate of the entire cluster                              |
++-------------+------------------------------------------------------------------------+
+| end         | End coordinate of the entire cluster                                   |
++-------------+------------------------------------------------------------------------+
+| length      | Sum of the lengths of all exons part of this cluster                   |
++-------------+------------------------------------------------------------------------+
+| score       | Sum of the Foldseek bitscores of all cluster members                   |
++-------------+------------------------------------------------------------------------+
+| scaff       | ID of the scaffold/contig harbouring this cluster                      |
++-------------+------------------------------------------------------------------------+
+| taxon_name  | Name of the taxon (e.g. NCBI Assembly ID)                              |
++-------------+------------------------------------------------------------------------+
+| taxon_id    | Unique taxon ID (e.g. NCBI taxon ID)                                   |
++-------------+------------------------------------------------------------------------+
+| filelabel   | Unique filelabel of the genome assembly file this cluster was found in |
++-------------+------------------------------------------------------------------------+
 
 Hit table
 ^^^^^^^^^

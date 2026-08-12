@@ -28,7 +28,7 @@ Preparing context DB
 
 .. note::
 
-   To skip this step, get the premade context DB for this example here.
+   To skip this step, get the premade context DB for this example `here <https://zenodo.org/records/21281792>`_.
 
 
 To build the context DB, we need all `Bacillaceae` Genbank files from NCBI. I usually first get a list of accession IDs from the NCBI website. In this case, I searched for `Bacillaceae` (taxonomy ID 186817) and started browsing their genomes. I applied some gentle filtering (RefSeq-annotated genomes, excluding atypical ones). As of 17th April 2026, there were 16.394 genomes.
@@ -57,7 +57,7 @@ Preparing target DB
 
 .. note::
 
-   To skip this step, get the MMseqs clustering table and the Foldseek DB here.
+   To skip this step, get the MMseqs clustering table and the Foldseek DB `here <https://zenodo.org/records/21281792>`_.
 
 
 To build the target DB, we need all `Bacillaceae` protein Fasta files from NCBI. Downloading these can be done similarly as for the Genbanks for the context DB, yet do not forget to check Protein Fasta now.
@@ -78,7 +78,7 @@ To make my life easier, I usually collect all the protein fasta files in this NC
 	mkdir faas
 	dir -1 faa_package/ncbi_dataset/data | xargs -I % mv faa_package/ncbi_dataset/data/%/protein.faa faas/%.faa
 
-Together, these files may easily contain more than 40M protein sequences. So, to reduce later computational work spent generating protein models, cluster them first using ``mmseqs easy-linclust`` at an identity and coverage threshold of 90 %. Using 32 cores on a HPC, this took about 15 minutes, resulting in 5.157.432 clusters. So, we only need to generate protein models for **one eighth** of all proteins after all! 
+Together, these files may easily contain more than 40M protein sequences. So, to reduce later computational work spent generating protein models, you can cluster them first using ``mmseqs easy-linclust`` and then make ``cfoldseeker`` search only the representatives (same approach as NCBI's ClusteredNR database). Let's precluster here at an identity and coverage threshold of 90 %. Using 32 cores on a HPC, this took about 15 minutes, resulting in 5.157.432 clusters. So, we only need to generate protein models for **one eighth** of all proteins after all! 
 
 .. code-block:: bash
 
@@ -113,7 +113,7 @@ Using two NVIDIA H200 GPUs (Hopper generation) on an HPC, this took 19 hours.
 
    **This is a computationally demanding task!** It is highly recommended to use GPU acceleration with an NVIDIA GPU of at least the Ampere generation!
 
-   You can get GPU-compatible binaries `here <https://dev.mmseqs.com/foldseek/>`_ if there are no binaries compiled for your (HPC) system.
+   You can get GPU-compatible binaries `here <https://dev.mmseqs.com/foldseek/>`_ if there are no binaries compiled for your (HPC) system. The `Bioconda package <https://anaconda.org/channels/bioconda/packages/foldseek/files>`_ should have GPU support as well.
 
 ``foldseek`` will have generated 11 files in the folder `DB`, all starting with the prefix `Bacillaceae`. This is your local target structure DB.
 
@@ -141,7 +141,7 @@ This should return 3446 identified clusters.
 	--session --summary --binary --plot --clinker --foldseek | \
 	tee cfoldseeker.log 
 
-All output files of this tutorial (except the clinker plot) can also be found in ``example`` of the ``cfoldseeker`` GitHib repo. Large files (context DB, MMseqs clustering table, target FoldSeek DB) are only available in the Zenodo copy.
+All output files of this tutorial (except for the large clinker plot) can also be found in ``example`` of the ``cfoldseeker`` GitHib repo. Large files (context DB, MMseqs clustering table, target FoldSeek DB) are only available in the Zenodo copy.
 
 Extracting clusters
 ~~~~~~~~~~~~~~~~~~~
