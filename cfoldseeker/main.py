@@ -155,7 +155,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
     """
     ## Validate arguments
     if args.mode not in ['local', 'remote', 'local_clustered']:
-        raise ValueError('Invalid search mode. Possible choices: "local" and "remote".')
+        raise ValueError('Invalid search mode. Possible choices: "local", "local_clustered", or "remote".')
     if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
         raise ValueError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
     # This check does not matter if there are results to be reused
