@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import operator
+import re
 import itertools as it
 import logging
 import shutil
@@ -696,6 +697,20 @@ class Search(ABC):
             """
             return [cl for cl in self.clusters if cl.number in nbs]
         
+        def remove_suffices(path: Path | str) -> str:
+            """
+            Removes any remaining sequence file extensions from a taxon name.
+            
+            Args:
+                path (Path | str): File path to be processed.
+                
+            Returns:
+                str: File path without trailing sequence file extensions
+            """
+            SEQ_FILE_EXTENSIONS = r'\.(fasta|fna|fa|gb|gbk|gbff)(\.gz)?$'
+            
+            return re.sub(SEQ_FILE_EXTENSIONS, '', str(path))
+        
         session_dict = {}
         
         ### Queries field
@@ -783,7 +798,7 @@ class Search(ABC):
             if (txid, txname, filelabel) in cblaster_organisms.keys():
                 this_organism = cblaster_organisms[(txid, txname, filelabel)]
             else:
-                this_organism = {'name': txname,
+                this_organism = {'name': remove_suffices(txname),
                                  'strain': '',
                                  'scaffolds': {}}
                 cblaster_organisms[(txid, txname, filelabel)] = this_organism
