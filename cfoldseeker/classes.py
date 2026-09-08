@@ -842,7 +842,7 @@ class Search(ABC):
                                                       'bitscore': hit.score}]
                     cblaster_this_subject['name'] = hit.crossref_id
                     cblaster_this_subject['ipg'] = hit.db_id
-                    cblaster_this_subject['start'] = hit.start() - 1 # Hits in cblaster are somehow one-off at the start
+                    cblaster_this_subject['start'] = hit.start()
                     cblaster_this_subject['end'] = hit.end()
                     cblaster_this_subject['strand'] = int(f"{hit.strand}1")
                     cblaster_this_subject['sequence'] = hit.filelabel

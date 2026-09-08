@@ -298,7 +298,7 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
                 # If we found the right scaffold...
                 if record.id == gbff_location['scaffold']:
                     # ... then fetch the nucleotide sequence
-                    nuc_seq = str(record[gbff_location['start']-1 : gbff_location['end']].seq)
+                    nuc_seq = str(record[gbff_location['start'] : gbff_location['end']].seq)
                     
                     # ... and the protein sequences
                     cds_features = [feat for feat in record.features if feat.type == 'CDS']
