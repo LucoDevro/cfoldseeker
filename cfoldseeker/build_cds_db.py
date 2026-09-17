@@ -6,10 +6,11 @@ import sys
 import gzip
 import logging
 import tempfile
+import gb_io
 import polars as pl
-from Bio import SeqIO, Entrez
+from Bio import Entrez
 from pathlib import Path
-from itertools import batched, chain
+from itertools import batched, chain, tee
 from csv import DictWriter
 from functools import partial
 from tqdm import tqdm
@@ -180,7 +181,7 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     return parsed_args
 
 
-def read_genome(file: str | Path):
+def read_file(file: str | Path, mode: str = 't'):
     """
     Open the appropriate file handle for a genome file.
     
@@ -188,16 +189,64 @@ def read_genome(file: str | Path):
     
     Args:
         file (str | Path): genome file to open
+        mode (str): file mode (text ('t'; default) or binary ('b'))
         
     Returns:
         handle: A file handle to open the genome file
     """
     if '.gz' in Path(file).suffixes:
-        handle = gzip.open(file, mode = 'rt')
+        handle = gzip.open(file, mode = f'r{mode}')
     else:
         handle = open(file, mode = 'r')
         
     return handle
+
+
+def _get_location_string(location) -> str:
+    """
+    Construct a location string for a gb_io Location object.
+    
+    Recursively constructs a location string by accessing the underlying objects
+    differently for each gb_io Location class.
+    
+    Args:
+        location (any gb_io location class (Join, Complement, Range)): Location object
+        
+    Returns:
+        location (str): A formatted location string, or a child location object to be accessed deeper
+    """
+    match type(location):
+        case gb_io.Complement:
+            return _get_location_string(location.location)
+        case gb_io.Join:
+            return ','.join(map(_get_location_string, location.locations))
+        case gb_io.Range:
+            return '..'.join([str(location.start), str(location.end)])
+        case _:
+            raise ValueError("Unsupported location class!")
+            
+            
+def _get_strand_string(location) -> str:
+    """
+    Construct a strand string for a gb_io Location object.
+    
+    Determine strand location from the gb_io object class.
+    
+    Args: 
+        location (any gb_io location class (Join, Complement, Range)): Location object
+        
+    Returns:
+        strand (str): Positive ('+') or negative ('-') strand
+    """
+    match type(location):
+        case gb_io.Complement:
+            return '-'
+        case gb_io.Join:
+            return '+'
+        case gb_io.Range:
+            return '+'
+        case _:
+            raise ValueError("Unsupported location class!")
 
 
 def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in_package: bool = False) -> None:
@@ -221,9 +270,9 @@ def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in
     file = numbered_filepath[1]
     cds_records = []
     
-    with read_genome(file) as handle:
+    with read_file(file) as handle:
         # First parse the Genbank
-        records = list(SeqIO.parse(handle, 'genbank'))
+        records, first_record = tee(gb_io.iter(handle))
         
         # Get filename
         if in_package:
@@ -232,33 +281,32 @@ def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in
             filelabel = file.with_suffix('.gz').with_suffix('').with_suffix('').name
         
         # Get taxon id
-        first_source_feature = [feat for feat in records[0].features if feat.type == 'source'][0]
-        first_source_feature_dbxrefs = first_source_feature.qualifiers['db_xref']
-        taxon_id = [xref for xref in first_source_feature_dbxrefs if 'taxon:' in xref][0]
-        taxon_id = int(taxon_id.split(':')[1])
+        first_record = next(first_record)
+        first_source_feature = next(filter(lambda x: x.kind == 'source', first_record.features))
+        first_source_feature_dbxrefs = filter(lambda x: x.key == 'db_xref', first_source_feature.qualifiers)
+        taxon_id = next(filter(lambda x: 'taxon:' in x.value, first_source_feature_dbxrefs))
+        taxon_id = int(taxon_id.value.split(':')[1])
         
         # Parse all CDS features
         for record in records:
-            cds_features = [feat for feat in record.features if feat.type == 'CDS']
+            cds_features = filter(lambda x: x.kind == "CDS", record.features)
             for feature in cds_features:
-                
                 # Try to fetch all necessary data for a CDS record
                 try:
-                    coord_intervals = ['..'.join([str(part.start), str(part.end)]) 
-                                       for part in feature.location.parts]
+                    qualifiers = {q.key: q.value for q in feature.qualifiers}
                     cds_record = {
-                        'gene_tag': feature.qualifiers['protein_id'][0],
-                        'name': feature.qualifiers['product'][0],
-                        'contig': record.id,
-                        'coords': ','.join(coord_intervals),
-                        'strand': '{0:+}'.format(feature.location.strand)[0],
+                        'gene_tag': qualifiers['protein_id'],
+                        'name': qualifiers['product'],
+                        'contig': record.version,
+                        'coords': _get_location_string(feature.location),
+                        'strand': _get_strand_string(feature.location),
                         'taxon_id': taxon_id,
                         'filelabel': filelabel,
                         }
                     
                     cds_records.append(cds_record)
                     
-                # If some data is lacking, ignore this entry
+                # If some qualifiers are lacking, ignore this entry
                 except KeyError:
                     continue
     
@@ -287,11 +335,11 @@ def _add_one_bakta_genbank_to_db(numbered_filepath: tuple, writer: DictWriter) -
     file = numbered_filepath[1]
     cds_records = []
     
-    with read_genome(file) as handle:
+    with read_file(file) as handle:
         # First parse the Genbank
-        records = list(SeqIO.parse(handle, 'genbank'))
+        records = gb_io.iter(handle)
         
-        # Get filelabel
+        # Get filename
         filelabel = file.with_suffix('.gz').with_suffix('').with_suffix('').name
         
         # Assign generic taxon id
@@ -299,26 +347,24 @@ def _add_one_bakta_genbank_to_db(numbered_filepath: tuple, writer: DictWriter) -
         
         # Parse all CDS features
         for record in records:
-            cds_features = [feat for feat in record.features if feat.type == 'CDS']
+            cds_features = filter(lambda x: x.kind == "CDS", record.features)
             for feature in cds_features:
-                
                 # Try to fetch all necessary data for a CDS record
                 try:
-                    coord_intervals = ['..'.join([str(part.start), str(part.end)]) 
-                                       for part in feature.location.parts]
+                    qualifiers = {q.key: q.value for q in feature.qualifiers}
                     cds_record = {
-                        'gene_tag': feature.qualifiers['locus_tag'][0],
-                        'name': feature.qualifiers['product'][0],
-                        'contig': record.id,
-                        'coords': ','.join(coord_intervals),
-                        'strand': '{0:+}'.format(feature.location.strand)[0],
+                        'gene_tag': qualifiers['locus_tag'],
+                        'name': qualifiers['product'],
+                        'contig': record.version,
+                        'coords': _get_location_string(feature.location),
+                        'strand': _get_strand_string(feature.location),
                         'taxon_id': taxon_id,
                         'filelabel': filelabel,
                         }
                     
                     cds_records.append(cds_record)
                     
-                # If some data is lacking, ignore this entry
+                # If some qualifiers are lacking, ignore this entry
                 except KeyError:
                     continue
     
@@ -396,16 +442,14 @@ def parse_files(input_path: Path, parsing_mode: str, temp_cds_db_path: Path,
             LOG.info('Parsing all input files as TSVs')
             parser = _add_one_tsv_to_db
             files = input_path.glob('*.tsv')
-    inputs = enumerate(files)
             
     # Parse all Genbanks and write them to a temporary TSV.GZ file
     fieldnames = ['gene_tag', 'name', 'contig', 'coords', 'strand', 'taxon_id', 'filelabel']
     with gzip.open(temp_cds_db_path, 'wt') as out_handle:
-        writer = DictWriter(out_handle, fieldnames, delimiter = '\t')
+            writer = DictWriter(out_handle, fieldnames, delimiter = '\t')
+            for numbered_filepath in tqdm(list(enumerate(files)), leave = False, disable = no_progress): 
+                parser(numbered_filepath, writer)
         
-        for numbered_filepath in tqdm(list(inputs), leave = False, disable = no_progress): 
-            parser(numbered_filepath = numbered_filepath, writer = writer)
-       
     # Return a LazyFrame entrypoint
     cds_db = pl.scan_csv(temp_cds_db_path, separator = "\t", has_header = False, new_columns = fieldnames)
                 

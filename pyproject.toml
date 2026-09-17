@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cfoldseeker"
-version = "0.2.0"
+version = "0.3.0"
 description = "Find gene clusters via protein structure similarity"
 
 authors = [
@@ -24,11 +24,12 @@ classifiers = [
 dependencies = [
     "biopython",
     "tqdm",
-    "cblaster >=1.4.0",
+    "cblaster ==1.4.0",
     "polars >=1.0.0",
     "networkx",
     "requests",
-    "kegg-pull"
+    "kegg-pull",
+    "gb-io",
 ]
 
 readme = "README.md"

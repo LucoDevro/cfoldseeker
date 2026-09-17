@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import polars as pl
+import gb_io
 import gzip
 import logging
 import sys
@@ -222,7 +223,7 @@ def locate_protein_sequences(scaffolds: list[Scaffold]) -> pl.DataFrame:
     return pl.from_dicts(prot_locations)
 
 
-def read_genome(file: str | Path):
+def read_file(file: str | Path, mode: str = 't'):
     """
     Open the appropriate file handle for a genome file.
     
@@ -230,12 +231,13 @@ def read_genome(file: str | Path):
     
     Args:
         file (str | Path): genome file to open
+        mode (str): file mode (text ('t'; default) or binary ('b'))
         
     Returns:
         handle: A file handle to open the genome file
     """
     if '.gz' in Path(file).suffixes:
-        handle = gzip.open(file, mode = 'rt')
+        handle = gzip.open(file, mode = f'r{mode}')
     else:
         handle = open(file, mode = 'r')
         
@@ -291,32 +293,33 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
         prot_location = prot_locations.filter(pl.col('cluster_number') == cluster.number).to_dicts()
         prot_ids = {prot['id'] for prot in prot_location}
         
-        # Fetch sequences
+        # Fetch sequences using gb_io
         # Parse scaffolds one by one until we have the one we need
-        with read_genome(gbff_file) as handle:
-            for record in SeqIO.parse(handle, 'genbank'):
+        with read_file(gbff_file) as handle:
+            for record in gb_io.iter(handle):
                 # If we found the right scaffold...
-                if record.id == gbff_location['scaffold']:
+                if record.version == gbff_location['scaffold']:
                     # ... then fetch the nucleotide sequence
-                    nuc_seq = str(record[gbff_location['start'] : gbff_location['end']].seq)
+                    nuc_seq = record.sequence[gbff_location['start'] : gbff_location['end']].decode()
                     
                     # ... and the protein sequences
-                    cds_features = [feat for feat in record.features if feat.type == 'CDS']
+                    cds_features = filter(lambda x: x.kind == 'CDS', record.features)
                     cluster_prot_sequences = {}
                     for feat in cds_features:
+                        qualifiers = {q.key: q.value for q in feat.qualifiers}
                         try:
-                            protein_id = feat.qualifiers['protein_id'][0].split('|')[-1]
+                            protein_id = qualifiers['protein_id'].split('|')[-1]
                         # If the protein does not have an ID, it's a pseudogene or not annotated properly
                         except KeyError:
                             continue
                         if protein_id in prot_ids:
-                            protein_sequence = feat.qualifiers['translation'][0]
+                            protein_sequence = qualifiers['translation']
                             cluster_prot_sequences[protein_id] = protein_sequence
                     
                     # ... and stop trying other scaffolds
                     break
                 
-        # Define sequence Record using cblaster function
+        # Define BioPython SeqRecord object using cblaster function
         seq_record = cluster_to_record(cluster = cluster,
                                        cluster_prot_sequences = cluster_prot_sequences,
                                        cluster_nuc_sequence = nuc_seq,
@@ -325,7 +328,7 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
                                        format_ = flavour,
                                        required_genes = required_genes)
         
-        # Write Genbank file
+        # Write Genbank file using BioPython
         output_file = output_dir / f"{prefix}cluster{cluster.number}.gbk"
         LOG.debug(f'Writing Genbank file {output_file.name}')
         with open(output_file, 'w') as handle:
