@@ -1,7 +1,7 @@
 User guide
 ============
 
-``cfoldseeker`` has several search modes and helper tools, each one requiring different prior work to be done with MMseqs and/or FoldSeek.
+``cfoldseeker`` has several search modes and helper tools, each one requiring different prior work to be done using MMseqs and/or FoldSeek.
 
 .. tip::
 
@@ -36,7 +36,7 @@ The local mode requires from you a set of query protein structures, a genomic co
 
 .. warning::
 
-   Make sure your filepaths point to a fast harddrive! ``cfoldseeker`` uses the disk intensely in local mode, so don't make it an annoying bottleneck!
+   Make sure your files are on a fast harddrive! ``cfoldseeker`` does a lot of disk I/O in local mode, so don't make it an annoying bottleneck!
 
 Prior work
 ^^^^^^^^^^
@@ -48,13 +48,13 @@ Prior work
 
    ``cfoldseeker-cds`` usually produces context DBs populated with filelabels sourced from the Genbanks' filenames. Typically, these are some database's accession codes. Although using accession codes standardises analysis outputs greatly, they are not very human-friendly. You can use one of the ``-tn*`` flags to make ``cfoldseeker-cds`` populate the context DB with **readily readable taxon names**. These names will then be used in the outputs of a ``cfoldseeker`` analysis.
 
-   In both NCBI modes, ``cfoldseeker-cds`` will fetch the taxon names, either from NCBI via the Entrez API (``-tna``) or from a local mapping file (``-tnf``). In Bakta mode, it will generate a generic taxon name or read them in from a local mapping file. In TSV mode, it will trust the user's inputs as documented in the TSV files.
+   In both NCBI modes, ``cfoldseeker-cds`` will fetch taxon names, either from NCBI via the Entrez API (``-tna``) or from a local mapping file (``-tnf``). In Bakta mode, it will generate a generic taxon name, or read them in from a local mapping file. In TSV mode, it will copy the user's inputs as documented in the TSV files.
 
 .. warning::
 
    **Replacing taxon names breaks the direct link between the sequence files and the hits!** Don't use this when you intend to do downstream analyses (e.g. extract gene cluster Genbank files later on, hit dereplication). You can keep two versions of the context DB: one with intact filelabels for downstream processing, and one with human-readable taxon names for reporting.
 
-   For more information about ``cfoldseeker-cds``, head over to `its user guide <https://cfoldseeker.readthedocs.io/en/latest/guide/usage.html#context-DB-construction>`_.
+   For more information about ``cfoldseeker-cds``, head over to `its user guide <https://cfoldseeker.readthedocs.io/en/latest/guide/usage.html#constructing-context-dbs>`_.
 
 To produce a compressed genomic context DB ``ncbi_package_db.gz`` from a default NCBI package (a folder ``ncbi_dataset``, which has an identically named subfolder):
 
@@ -82,7 +82,7 @@ Or with taxon names fetched from a local file:
 
    Context DBs can be concatenated using ``cat``. No need to rerun the builder!
 
-**3.** Generate the target DB ``target_DB`` using ``foldseek createdb``. This prepares a FoldSeek DB from your folder containing the target set of protein structures (``input``). You probably don't have thousands of protein structures lingering around, so for large-scale analyses, you will need FoldSeek's builtin support of **ProstT5**, a LLM that directly translates amino acid sequences into FoldSeek's internal 3Di alphabet, skipping protein model prediction. **This is the key step that makes searching sequence databases using structural similarity computationally tractable.**
+**3.** Generate the target DB ``target_DB`` using ``foldseek createdb``. This prepares a FoldSeek DB from your folder containing the target set of protein structures (``input``). You probably don't have thousands of protein structures lingering around, so for large-scale analyses, you will need FoldSeek's builtin support for **ProstT5**, a LLM that directly translates amino acid sequences into FoldSeek's internal 3Di alphabet, skipping expensive protein model prediction. **This is the key step that makes searching sequence databases using structural similarity computationally tractable.**
 
 First make sure you have downloaded ProstT5's weights.
 
@@ -98,7 +98,7 @@ Then you can build the FoldSeek DB directly from your protein sequences in ``inp
 
 .. warning::
 
-   This is still a **time- and computationally demanding** task! Consider using a GPU (by adding the ``--gpu 1`` flag if you have the hardware configured).
+   This is still a **time- and computationally demanding** task! Consider using a GPU (by adding the ``--gpu 1`` flag) if you have the hardware configured.
 
 .. tip::
 
@@ -120,13 +120,13 @@ The local-clustered mode requires a set of query protein structures, a genomic c
 
 .. warning::
 
-   Make sure your filepaths point to a fast harddrive! ``cfoldseeker`` uses the disk intensely in local mode, so don't make it an annoying bottleneck!
+   Make sure your files are on a fast harddrive! ``cfoldseeker`` does a lot of disk I/O in local mode, so don't make it an annoying bottleneck!
 
 Prior work
 ^^^^^^^^^^
 **1.** Get structural models as CIF files of your query proteins, either experimentally or computationally (AlphaFold, ESMFold, OpenFold...). Collect them all in one folder ``query_models``.
 
-**2.** Build a genomic context table using our provided helper tool ``cfoldseeker-cds``, which builds a context table directly from a set of NCBI or Bakta Genbank files, or from a folder holding an NCBI package of Genbank files. *(See the prior work section of local search above)*
+**2.** Build a genomic context table using our provided helper tool ``cfoldseeker-cds``, which builds a context table directly from a set of NCBI or Bakta Genbank files, or from a folder holding an NCBI package of Genbank files. See the `prior work section of local search <https://cfoldseeker.readthedocs.io/en/latest/guide/usage.html#id1>`.
 
 **3.** Cluster your target sequences in the folder ``input_all`` using ``mmseqs``. You can do this using ``easy-cluster``, or ``easy-linclust`` for huge sequence databases. We recommend to use an identity and a coverage threshold of 90 % to ensure all proteins in a protein cluster have identical functions. **Use other thresholds at your own risk!**
 
@@ -136,7 +136,7 @@ Prior work
 
 This will, among others, produce a fasta file ``clustered_rep_seq.fasta`` containing the amino acid sequences of the representative protein of each cluster, and a clustering table ``clustered_table.tsv`` outlining the members and representatives of each sequence cluster.
 
-**4.** Generate the target structure DB from the representative sequences using FoldSeek and ProstT5 (see also the prior work section of local search above). Make sure you have downloaded ProstT5's weights.
+**4.** Generate the target structure DB from the representative sequences using FoldSeek and ProstT5 (see also the `prior work section of local search <https://cfoldseeker.readthedocs.io/en/latest/guide/usage.html#id1>`_). Make sure you have downloaded ProstT5's weights.
 
 .. code-block:: bash
 
@@ -184,7 +184,7 @@ The general search options are a mix of what ``cblaster`` and ``foldseek`` offer
 
 Getting all cluster layouts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Sometimes, a protein may match with multiple query proteins, for example when you have two paralogs among your query proteins. This makes it tricky to determine what the query layout of an identified cluster is. For example, if two proteins in a cluster both match with query proteins 1 and 2, cluster layout *12* is equally correct as layout *21*. By default, if ``cfoldseeker`` encounters an identical cluster passing the filtering thresholds with different layouts, it will keep the one with the highest cluster score.
+Sometimes, a protein may match with multiple query proteins, for example when you have two paralogs among your query proteins. This makes it tricky to determine what the query synteny layout of an identified cluster is. For example, if two proteins in a cluster both match with query proteins 1 and 2, cluster layout *12* is equally correct as layout *21*. By default, if ``cfoldseeker`` encounters an identical cluster passing the filtering thresholds with different layouts, it will keep the one with the highest cluster score.
 
 If you are interested in all possible cluster layouts passing your filtering thresholds rather than only the highest-scoring one, turn on the ``all-layouts`` flag to keep all passing configurations.
 
@@ -255,6 +255,8 @@ The ``hits.tsv`` file gathers metadata about all hits part of the identified clu
 +-----------------+----------------------------------------------------------------------------+
 | taxon_id        | Unique taxon ID (e.g. NCBI taxon ID)                                       |
 +-----------------+----------------------------------------------------------------------------+
+| filelabel       | Unique filelabel of the genome assembly file this cluster was found in     |
++-----------------+----------------------------------------------------------------------------+
 | evalue          | Hit e-value                                                                |
 +-----------------+----------------------------------------------------------------------------+
 | score           | Hit bitscore                                                               |
@@ -272,7 +274,7 @@ Foldseek output
 
 *cblaster* outputs
 ^^^^^^^^^^^^^^^^^^
-``cfoldseeker`` has tightly integrated ``cblaster``. All results are cast into a cblaster session, from which familiar outputs can be obtained, such as the summary table, the binary table, the hit plot, and the clinker alignment. See `the cblaster documentation <https://cblaster.readthedocs.io/en/latest/guide/search_module.html#specifying-output>`_ for specifics on these outputs.
+``cfoldseeker`` has tightly integrated ``cblaster``. All results are cast into a cblaster session, from which familiar outputs can be obtained, such as the summary table, the binary table, the hit plot, and the clinker alignment visualisation. See `the cblaster documentation <https://cblaster.readthedocs.io/en/latest/guide/search_module.html#specifying-output>`_ for specifics on these outputs.
 
 Constructing context DBs
 ------------------------
@@ -295,7 +297,7 @@ Context DBs are crucial as they hold the genomic location of each protein's CDS,
 +--------------+-----------------------------------------------------------------------+
 | Taxon name   | Name of the taxon (identical to filelabel at default settings)        |
 +--------------+-----------------------------------------------------------------------+
-| Filelabel    | Filename of the associated sequence file                              |
+| Filelabel    | Stem of the filename of the associated sequence file                  |
 +--------------+-----------------------------------------------------------------------+
 
 ``cfoldseeker-cds`` provides four parsing modes to construct this genomic context DB, depending on the source of your Genbank files and the annotation source or flexibility you prefer.
@@ -331,7 +333,7 @@ This mode parses a package of NCBI Genbank files. After downloading and extracti
 
 When using this parsing mode, ``cfoldseeker-cds`` expects the input path to point to the parent folder ``ncbi_dataset``. It will then parse all Genbank files inside ``ncbi_dataset/ncbi_dataset/data``, and by default will use the name of the accession subfolders (typically an accession ID) as taxon names for the CDSes in that Genbank file. It will also keep track of every NCBI taxon ID it finds in the Genbank files. You can override the taxon names by making it fetch the taxon names associated with the taxon IDs using NCBI Entrez (``-tna``). However, fetching from Entrez may be cumbersome when the number of files is large. Therefore, we also provide the option to use a local rename file (``-tnf``). This rename file is a simple headerless tab-separated text file, with as first column the current taxon name (typically an accession ID), and as second column the new taxon name.
 
-I usually prepare my rename files from the metadata table downloaded from that same NCBI Datasets portal I downloaded my Genbank files from (typically ``ncbi_dataset.tsv``). Download the metadata table for the accessions you've selected earlier for your Genbank files (download dropdown menu). This TSV table contains all information you need for a rename file. You only need the `Assembly accession` and the `Organism Name` columns. For bacteria, the `Organism Infraspecific Names Strain` column may also be relevant.
+I usually prepare my rename files from the metadata table downloaded from that same NCBI Datasets portal I downloaded my Genbank files from. Download the metadata table for the accessions you've selected earlier for your Genbank files (download dropdown menu; filename ``ncbi_dataset.tsv``). This TSV table contains all information you need for a rename file. You only need the `Assembly accession` and the `Organism Name` columns. For bacteria, the `Organism Infraspecific Names Strain` column may also be relevant.
 
 So, for bacteria, I usually cut-and-paste my rename file (`taxon_name_mapping`) together using the following bash command. The first column is for `Assembly accession`, and the second is for the space-joined columns `Organism Name` and `Organism Infraspecific Names Strain`.
 
@@ -345,39 +347,39 @@ So, for bacteria, I usually cut-and-paste my rename file (`taxon_name_mapping`) 
 
 NCBI Genbank files
 ~~~~~~~~~~~~~~~~~~~
-This mode parses a folder of Genbank files assuming that they are standardised NCBI files. By default, this mode sources the taxon name from the filename. However, you can again override this by making ``cfoldseeker-cds`` fetch taxon names for the NCBI taxon IDs it found in the Genbank files using Entrez, or by supplying a rename file.
+This mode parses a folder of Genbank files assuming that they are standardised NCBI files. By default, this mode sources the taxon name from the filename. However, you can again override this using the ``-tn*`` flags by making ``cfoldseeker-cds`` fetch taxon names for the NCBI taxon IDs it found in the Genbank files using Entrez, or by supplying a rename file.
 
 Bakta Genbank files
 ~~~~~~~~~~~~~~~~~~~~
-This mode parses a folder of Genbank files you have generated yourself using a genome annotation tool like Bakta. However, since these files typically don't contain a taxon ID, ``cfoldseeker-cds`` will use a generic taxon ID. Again, the taxon name is sourced from the filename by default, but this is overridable. If you select automatic override, ``cfoldseeker-cds`` will derive a generic taxon name from the earlier generated taxon ID. Using a rename file is more preferable here.
+This mode parses a folder of Genbank files you have generated yourself using a genome annotation tool like Bakta or Prokka. However, since these files typically don't contain a taxon ID, ``cfoldseeker-cds`` will generate a generic taxon ID. Again, the taxon name is sourced from the filename by default, but this is overridable using the ``-tn*`` flags. If you select automatic override, ``cfoldseeker-cds`` will derive a generic taxon name from the earlier generated taxon ID. Using a rename file is more preferable here.
 
 Manually annotated TSVs
 ~~~~~~~~~~~~~~~~~~~~~~~
 This mode offers maximum flexibility to annotate your CDSes. You can use multiple TSVes. Each file at least requires the columns specified below. **Make sure to include the header.**
 
-+--------------+------------------------------------------------------+
-| **Column**   | **Description**                                      |
-+--------------+------------------------------------------------------+
-| `gene_tag`   | Unique tag for the gene/CDS.                         |
-+--------------+------------------------------------------------------+
-| `name`       | Description or annotation of the gene.               |
-+--------------+------------------------------------------------------+
-| `contig`     | Unique identifier of the contig harbouring the gene. |
-+--------------+------------------------------------------------------+
-| `start`      | Start nucleotide coordinate of the CDS.              |
-+--------------+------------------------------------------------------+
-| `end`        | End nucleotide coordinate of the CDS.                |
-+--------------+------------------------------------------------------+
-| `strand`     | The strand coding for the protein.                   |
-+--------------+------------------------------------------------------+
-| `taxon_id`   | Identifier of the taxon.                             |
-+--------------+------------------------------------------------------+
-| `filelabel`  | Filename of the associated sequence file.            |
-+--------------+------------------------------------------------------+
++--------------+-------------------------------------------------------+
+| **Column**   | **Description**                                       |
++--------------+-------------------------------------------------------+
+| `gene_tag`   | Unique tag for the gene/CDS.                          |
++--------------+-------------------------------------------------------+
+| `name`       | Description or annotation of the gene.                |
++--------------+-------------------------------------------------------+
+| `contig`     | Unique identifier of the contig harbouring the gene.  |
++--------------+-------------------------------------------------------+
+| `start`      | Start nucleotide coordinate of the CDS.               |
++--------------+-------------------------------------------------------+
+| `end`        | End nucleotide coordinate of the CDS.                 |
++--------------+-------------------------------------------------------+
+| `strand`     | The strand coding for the protein.                    |
++--------------+-------------------------------------------------------+
+| `taxon_id`   | Identifier of the taxon.                              |
++--------------+-------------------------------------------------------+
+| `filelabel`  | Stem of the filename of the associated sequence file. |
++--------------+-------------------------------------------------------+
 
 Extracting gene clusters
 -------------------------
-To facilitate downstream analyses, ``cfoldseeker-seqs`` facilitates getting sequence files for all identified gene clusters. Therefore, it fetches the nucleotide and amino acid sequences of every hit involved from your Genbank files. ``cfoldseeker-seqs`` supports various filters to pinpoint the the gene clusters you prefer (e.g. cluster numbers, organism filters, scaffold filters, score threshold, the top x scoring hits).
+To facilitate downstream analyses, ``cfoldseeker-seqs`` can generate Genbank sequence files for all identified gene clusters. Therefore, it fetches the nucleotide and amino acid sequences of every hit involved from your Genbank files. ``cfoldseeker-seqs`` supports various filters to pinpoint the the gene clusters you prefer (e.g. cluster numbers, organism filters, scaffold filters, score threshold, the top x scoring hits).
 
 A gonna-catch-them-all ``cfoldseeker-seqs`` commands looks like the one below.
 

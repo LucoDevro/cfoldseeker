@@ -28,7 +28,7 @@ Preparing context DB
 
 .. note::
 
-   To skip this step, get the premade context DB for this example `here <https://zenodo.org/records/21281792>`_.
+   To skip this step, get the premade context DB (``cds_db.tsv.gz``) for this example `here <https://zenodo.org/records/21281792>`_.
 
 
 To build the context DB, we need all `Bacillaceae` Genbank files from NCBI. I usually first get a list of accession IDs from the NCBI website. In this case, I searched for `Bacillaceae` (taxonomy ID 186817) and started browsing their genomes. I applied some gentle filtering (RefSeq-annotated genomes, excluding atypical ones). As of 17th April 2026, there were 16.394 genomes.
@@ -57,7 +57,7 @@ Preparing target DB
 
 .. note::
 
-   To skip this step, get the MMseqs clustering table and the Foldseek DB `here <https://zenodo.org/records/21281792>`_.
+   To skip this step, get the MMseqs clustering table and the Foldseek DB files `here <https://zenodo.org/records/21281792>`_ (``bacillaceae_clustered.tsv.gz``, and ``Bacillaceae_foldseekDB.tar.gz``).
 
 
 To build the target DB, we need all `Bacillaceae` protein Fasta files from NCBI. Downloading these can be done similarly as for the Genbanks for the context DB, yet do not forget to check Protein Fasta now.
@@ -78,7 +78,7 @@ To make my life easier, I usually collect all the protein fasta files in this NC
 	mkdir faas
 	dir -1 faa_package/ncbi_dataset/data | xargs -I % mv faa_package/ncbi_dataset/data/%/protein.faa faas/%.faa
 
-Together, these files may easily contain more than 40M protein sequences. So, to reduce later computational work spent generating protein models, you can cluster them first using ``mmseqs easy-linclust`` and then make ``cfoldseeker`` search only the representatives (same approach as NCBI's ClusteredNR database). Let's precluster here at an identity and coverage threshold of 90 %. Using 32 cores on a HPC, this took about 15 minutes, resulting in 5.157.432 clusters. So, we only need to generate protein models for **one eighth** of all proteins after all! 
+Together, these files may easily contain more than 40M protein sequences. So, to reduce later computational work spent generating protein models, you can cluster them first using ``mmseqs easy-linclust`` and then make ``cfoldseeker`` search only the representatives (same approach as BLASTing against NCBI's ClusteredNR database). Let's precluster here at an identity and coverage threshold of 90 %. Using 32 cores on a HPC, this took about 15 minutes, resulting in 5.157.432 clusters. So, we only need to generate protein models for **one eighth** of all proteins after all! 
 
 .. code-block:: bash
 
@@ -88,7 +88,7 @@ Together, these files may easily contain more than 40M protein sequences. So, to
 
 .. note::
 
-   Although you can definitely run ``cfoldseeker`` against a set of protein structure models, it is currently computationally intractable to generate full protein structures up to the same scale as the sequences in the NCBI databases.
+   Although you can definitely run ``cfoldseeker`` against a set of protein structure models, it is currently computationally intractable to generate that many full protein structures at the scale of the NCBI sequence databases.
 
    `ProstT5 <https://academic.oup.com/nargab/article/6/4/lqae150/7901286>`_ is a LLM that mitigates this by directly translating amino acid sequences to Foldseek's 3Di alphabet, skipping the expensive structure prediction step. ProstT5 is integrated in ``foldseek``.
 
@@ -115,14 +115,14 @@ Using two NVIDIA H200 GPUs (Hopper generation) on an HPC, this took 19 hours.
 
    You can get GPU-compatible binaries `here <https://dev.mmseqs.com/foldseek/>`_ if there are no binaries compiled for your (HPC) system. The `Bioconda package <https://anaconda.org/channels/bioconda/packages/foldseek/files>`_ should have GPU support as well.
 
-``foldseek`` will have generated 11 files in the folder `DB`, all starting with the prefix `Bacillaceae`. This is your local target structure DB.
+``foldseek`` will generate 11 files in the folder `DB`, all starting with the prefix `Bacillaceae`. This folder is your local target structure DB.
 
 Search with ``cfoldseeker``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 We now have all prerequisites to run ``cfoldseeker`` in local_clustered mode.
 
-The following command runs ``cfoldseeker`` at relaxed search settings using 14 cores, requiring the YcaO protein, and makes it produce every supported output file in the new folder `cfoldseeker_search`. By appending a ``tee`` pipe, you can capture the logs in a log file.
+The following command runs ``cfoldseeker`` at relaxed search settings using 14 cores, requiring the YcaO protein (WP_020634196.1), and makes it produce every supported output file in the new folder `cfoldseeker_search`. By appending a ``tee`` pipe, you can capture the logs in a log file.
 
 This should return 3446 identified clusters.
 
@@ -141,14 +141,14 @@ This should return 3446 identified clusters.
 	--session --summary --binary --plot --clinker --foldseek | \
 	tee cfoldseeker.log 
 
-All output files of this tutorial (except for the large clinker plot) can also be found in ``example`` of the ``cfoldseeker`` GitHib repo. Large files (context DB, MMseqs clustering table, target FoldSeek DB) are only available in the Zenodo copy.
+All output files of this tutorial (except for the large clinker plot) can also be found in ``example`` of the ``cfoldseeker`` GitHib repo. Large files (context DB, MMseqs clustering table, target FoldSeek DB) are only available in the Zenodo repo.
 
 Extracting clusters
 ~~~~~~~~~~~~~~~~~~~
 
 We can get separate Genbank files for each identified cluster using ``cfoldseeker-seqs``, and use it for downstream analysis.
 
-For this, we need the earlier downloaded Genbank files from NCBI, but now we will collect them all in one folder ``gbffs``. This can be done using a similar approach as before. Add a `.gz` extension if you downloaded compressed files.
+For this, we need the earlier downloaded Genbank files from NCBI, but now we will collect them all in one folder ``gbffs``. This can be done using the oneliner from before. Add a `.gz` extension if you downloaded compressed files.
 
 .. code-block:: bash
 

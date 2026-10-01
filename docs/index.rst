@@ -16,7 +16,7 @@ cfoldseeker
 
 **The local mode** launches FoldSeek searches against a local structure database, and uses a genomic context database prepared from your local sequences using its helper tool ``cfoldseeker-cds``.
 
-**The local-clustered mode** facilitates searches against huge structure databases by searching against representative proteins identified through preclustering with ``mmseqs2``.
+**The local-clustered mode** extends local mode searches for huge protein structure databases by searching against representative proteins obtained through preclustering the original sequences with ``mmseqs2``.
    
 If you find ``cfoldseeker`` useful, please cite:
 
