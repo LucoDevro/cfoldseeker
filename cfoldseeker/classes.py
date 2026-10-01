@@ -192,10 +192,9 @@ class Hit:
                  for overlaps). Returns the negative of the length of the smaller
                  gene in case of a full overlap.
         """
-        first = min([self, other_hit], key = operator.methodcaller('start'))
+        first, last = sorted((self, other_hit), key = operator.methodcaller('start'))
         first_start = first.start()
         first_end = first.end()
-        last = max([self, other_hit], key = operator.methodcaller('start'))
         last_start = last.start()
         last_end = last.end()
         
@@ -207,10 +206,10 @@ class Hit:
             return last_start - first_end 
         
         
-    # Checks whether two hits are at exactly the same genomic coordinates
+    # Checks whether two hits are at exactly the same genomic location
     def same_location(self, other_hit: 'Hit') -> bool:
         """
-        Check if two hits are at exactly the same genomic coordinates.
+        Check if two hits are at exactly the same genomic location.
         
         Args:
             other_hit (Hit): The other Hit object to compare.
@@ -219,9 +218,11 @@ class Hit:
             bool: True if both hits are on the same scaffold and their genomic
                   coordinates completely overlap, False otherwise.
         """
-        first = min([self, other_hit], key = operator.methodcaller('start'))
-        last = max([self, other_hit], key = operator.methodcaller('start'))
-        return last.start() == first.start() and last.end() == first.end() and first.scaff == last.scaff
+        return all(
+            self.start() == other_hit.start(),
+            self.end() == other_hit.end(),
+            self.scaff == other_hit.scaff,
+            )
     
 
 class Cluster:
