@@ -148,8 +148,7 @@ class LocalSearch(Search):
                '-e', str(self.params['max_eval']),
                '--threads', str(self.params['cores']),
                '--gpu', str(int(self.params['gpu'])),
-               '--exhaustive-search', '1',
-               '--prefilter-mode', '1',
+               '--prefilter-mode', '2',
                ]
         
         # Launching search process
