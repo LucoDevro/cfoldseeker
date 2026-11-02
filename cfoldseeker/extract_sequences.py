@@ -291,7 +291,7 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
         
         # Extract protein IDs
         prot_location = prot_locations.filter(pl.col('cluster_number') == cluster.number).to_dicts()
-        prot_ids = {prot['id'] for prot in prot_location}
+        prot_ids_from_session = {prot['id'] for prot in prot_location}
         
         # Fetch sequences using gb_io
         # Parse scaffolds one by one until we have the one we need
@@ -312,9 +312,22 @@ def _write_one_cluster_genbank(enumerated_scaffold: tuple[int, Scaffold], assemb
                         # If the protein does not have an ID, it's a pseudogene or not annotated properly
                         except KeyError:
                             continue
-                        if protein_id in prot_ids:
+                        
+                        # Match the ID with the original ID from the session
+                        original_ids_from_session = [s for s in prot_ids_from_session if protein_id in s]
+                        if len(original_ids_from_session) == 1:
+                            protein_id_in_session = original_ids_from_session[0]
                             protein_sequence = qualifiers['translation']
-                            cluster_prot_sequences[protein_id] = protein_sequence
+                            cluster_prot_sequences[protein_id_in_session] = protein_sequence
+                        # Multi-matches should not happen since there cannot be double IDs on the same scaffold
+                        elif len(original_ids_from_session) > 1:
+                            msg = "Duplicate IDs found on this scaffold. Cannot pick the right CDS."
+                            LOG.error(msg)
+                            raise RuntimeError(msg)
+                        # An unmatched ID is likely of a protein that did not match with any query, 
+                        # so should be skipped
+                        else:
+                            continue
                     
                     # ... and stop trying other scaffolds
                     break
