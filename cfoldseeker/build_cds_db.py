@@ -392,7 +392,8 @@ def _add_one_tsv_to_db(numbered_filepath: tuple, writer: DictWriter) -> None:
     Note:
         Genomic coordinates (coords) are expected to already have been formatted as joined exons. Example: "1..100,105..200".
     """
-    # Envisioned header: ['gene_tag', 'name', 'contig', 'coords', 'strand', 'taxon_id', 'filelabel']
+    # Envisioned header: 
+    # 'gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'taxon_name', 'filelabel'
     df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = True, comment_prefix = '#')
     
     # Check out the CDS records
@@ -424,7 +425,8 @@ def parse_files(input_path: Path, parsing_mode: str, temp_cds_db_path: Path,
         with columns: gene_tag, name, contig, coords, strand, taxon_id, and filename
         (or taxon_name for TSV formats).
     """
-    # Select the right workflows
+    # Select the right workflow type
+    fieldnames = ['gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'filelabel']
     match parsing_mode:
         case 'ncbi-gbff':
             LOG.info('Parsing all input files as NCBI Genbanks')
@@ -442,9 +444,9 @@ def parse_files(input_path: Path, parsing_mode: str, temp_cds_db_path: Path,
             LOG.info('Parsing all input files as TSVs')
             parser = _add_one_tsv_to_db
             files = input_path.glob('*.tsv')
+            fieldnames.insert(-1, 'taxon_name')
             
     # Parse all Genbanks and write them to a temporary TSV.GZ file
-    fieldnames = ['gene_tag', 'name', 'contig', 'coords', 'strand', 'taxon_id', 'filelabel']
     with gzip.open(temp_cds_db_path, 'wt') as out_handle:
             writer = DictWriter(out_handle, fieldnames, delimiter = '\t')
             for numbered_filepath in tqdm(list(enumerate(files)), leave = False, disable = no_progress): 
@@ -678,9 +680,15 @@ def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_fil
                 LOG.info('Using filenames as taxon names')
                 cds_db = cds_db.with_columns(pl.col('filelabel').alias('taxon_name'))
                
-        # For other parsing modes, keep the user's annotations
-        case _:
+        # In tsv mode, keep the user's annotations
+        case 'tsv':
             pass
+        
+        # Catch problems
+        case _:
+            msg = f'Unknown parsing mode: {parsing_mode}'
+            LOG.critical(msg)
+            raise RuntimeError(msg)
             
     return cds_db
 
