@@ -247,7 +247,8 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
               }
     
     # File paths
-    paths = {'query' : {q.stem: q.resolve() for q in args.query_folder.glob('*.cif')},
+    query_paths = sorted(args.query_folder.glob('*.cif'), key = lambda p: p.name)
+    paths = {'query' : {q.stem: q.resolve() for q in query_paths},
              'uniprot_mapping' : args.mapping_table_path.resolve(),
              'cds_db_path' : args.cds_db_path.resolve(),
              'local_db_path' : args.local_db_path.resolve(),
