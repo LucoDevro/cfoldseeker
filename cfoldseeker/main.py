@@ -76,7 +76,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     args_search = parser.add_argument_group('General search options')
     args_search.add_argument('--max-eval', dest = "max_eval", type = float, default = 1e-9, help = "Maximum e-value to include a FoldSeek hit (default: 1e-9).")
-    args_search.add_argument('--min-score', dest = "min_score", type = float, default = 250, help = "Minimum FoldSeek bitscore to include a hit (default: 250).")
+    args_search.add_argument('--min-bitscore', dest = "min_bitscore", type = float, default = 250, help = "Minimum FoldSeek bitscore to include a hit (default: 250).")
     args_search.add_argument('--min-seqid', dest = "min_seqid", type = float, default = 0, help = "Minimum sequence identity to include a hit (in percentages) (default: 0).")
     args_search.add_argument('--min-qcov', dest = "min_qcov", type = float, default = 50, help = "Minimum query coverage to include a hit (in percentages) (default: 50).")
     args_search.add_argument('--min-tcov', dest = "min_tcov", type = float, default = 50, help = "Minimum target coverage to include a hit (in percentages) (default: 50).")
@@ -85,7 +85,10 @@ def create_parser() -> argparse.ArgumentParser:
     args_search.add_argument('--min-hits', dest = "min_hits", type = int, default = 2, help = "Minimum number of members in a cluster (default: 2).")
     args_search.add_argument('--min-cov-qrs', dest = "min_cov_qrs", type = int, default = 2, help = "Minimum different queries covered by a cluster (default: 2).")
     args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filenames without extensions).")
-    args_search.add_argument('--all-layouts', dest = 'all_layouts', default = False, action = 'store_true', help = "Include cluster layouts matching all criteria but with a less-than-best score (default: False).")
+    args_search.add_argument('--use-raw-scores', dest = "use_raw_scores", default = False, action = "store_true",
+                             help = "Sum raw bitscores to rank the identified clusters rather than the ones normalised by alignment length. Pushes cfoldseeker to focus on the longer proteins of your query, but risks these overdominate the cluster ranking. (default: false).")
+    args_search.add_argument('--all-layouts', dest = 'all_layouts', default = False, action = 'store_true',
+                             help = "Include cluster layouts matching all criteria but with a less-than-best score (default: False).")
     
     args_remote = parser.add_argument_group("Remote-specific search options")
     args_remote.add_argument('-rdb', '--remote-db', dest = 'db', type = str, default = ['afdb50'], nargs = '+', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
@@ -97,7 +100,7 @@ def create_parser() -> argparse.ArgumentParser:
     args_remote.add_argument('-w', '--max-workers', dest = "max_workers", type = int, default = 1, help = "Maximum number of workers to query the remote servers (FoldSeek, KEGG, ENA) (default: 1)")
     
     args_local = parser.add_argument_group('Local-specific search options')
-    args_local.add_argument('--gpu', dest = 'gpu', default = False, action = "store_true", help = "Use GPU acceleration for the FoldSeek search (default: False).")
+    args_local.add_argument('--gpu', dest = 'gpu', default = False, action = "store_true", help = "Use GPU acceleration for the FoldSeek search (default: false).")
     args_local_reuse = args_local.add_mutually_exclusive_group()
     args_local_reuse.add_argument('-ldb', '--local-db', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
     args_local_reuse.add_argument('--reuse-search', dest = 'reuse_search', type = Path, default = None,
@@ -174,7 +177,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
         raise ValueError('Maximum e-value should be a number between 0 and 1.')
     if not(args.min_seqid >= 0 and args.min_seqid <= 100):
         raise ValueError("Minimum sequence identity should be a percentage between 0 and 100.")
-    if not(args.min_score >= 0):
+    if not(args.min_bitscore >= 0):
         raise ValueError("Minimum FoldSeek bitscore should be a positive number.")
     if not(args.min_qcov >= 0 and args.min_qcov <= 100):
         raise ValueError("Minimum query coverage should be a percentage between 0 and 100.")
@@ -227,8 +230,9 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
               'max_workers': args.max_workers,
               'gpu': args.gpu,
               'reuse_search': args.reuse_search,
+              'use_raw_scores': args.use_raw_scores,
               'max_eval': args.max_eval,
-              'min_score': args.min_score,
+              'min_bitscore': args.min_bitscore,
               'min_seqid': args.min_seqid,
               'min_qcov': args.min_qcov,
               'min_tcov': args.min_tcov,

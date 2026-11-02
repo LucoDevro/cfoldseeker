@@ -52,7 +52,7 @@ class LocalClusteredSearch(LocalSearch):
                 no header).
             seq_clust_tsv: Path to the MMseqs2 clustering table.
             params: Dictionary of search parameters (e.g., min_seqid, max_eval,
-                min_score). Defaults to empty dict.
+                min_bitscore). Defaults to empty dict.
             hits: List of Hit objects from previous searches. Defaults to empty list.
             clusters: List of gene clusters from previous analysis. Defaults to
                 empty list.

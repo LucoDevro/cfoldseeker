@@ -74,7 +74,7 @@ class LocalSearch(Search):
             coord_db_path: Path to the CDS coordinates database file (tab-separated,
                 no header).
             params: Dictionary of search parameters (e.g., min_seqid, max_eval,
-                min_score). Defaults to empty dict.
+                min_bitscore). Defaults to empty dict.
             hits: List of Hit objects from previous searches. Defaults to empty list.
             clusters: List of gene clusters from previous analysis. Defaults to
                 empty list.
@@ -142,7 +142,7 @@ class LocalSearch(Search):
                str(self.TEMP_DIR / 'foldseek_tmp'),
                "--format-mode", '4',
                "--input-format", '2',
-               '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,evalue,bits',
+               '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,evalue,bits,alnlen',
                '-v', foldseek_verbosity,
                "--min-seq-id", str(self.params['min_seqid']),
                '-e', str(self.params['max_eval']),
@@ -197,7 +197,7 @@ class LocalSearch(Search):
         The following filtering thresholds are applied:
         1. Sequence identity >= min_seqid
         2. E-value <= max_eval
-        3. Bit score >= min_score
+        3. Bit score >= min_bitscore
         4. Query coverage >= min_qcov (converted to percentage)
         5. Target coverage >= min_tcov (converted to percentage)
         
@@ -205,7 +205,7 @@ class LocalSearch(Search):
             results (polars.DataFrame): A filtered FoldSeek hits table
         """
         ## Load the thresholds from params
-        min_score = self.params['min_score']
+        min_bitscore = self.params['min_bitscore']
         min_qcov = self.params['min_qcov']
         min_tcov = self.params['min_tcov']
         min_seqid = self.params['min_seqid']
@@ -225,13 +225,13 @@ class LocalSearch(Search):
         LOG.debug('Applying the following thresholds:')
         LOG.debug(f'sequence identity >= {min_seqid}')
         LOG.debug(f'evalue <= {max_eval}')
-        LOG.debug(f'bitscore >= {min_score}')
+        LOG.debug(f'bitscore >= {min_bitscore}')
         LOG.debug(f'query coverage >= {min_qcov}')
         LOG.debug(f'target coverage >= {min_tcov}')
         
         results = results.filter(pl.col('pident') >= min_seqid)
         results = results.filter(pl.col('evalue') <= max_eval)
-        results = results.filter(pl.col('bits') >= min_score)
+        results = results.filter(pl.col('bits') >= min_bitscore)
         results = results.filter(pl.col('qcov') >= min_qcov)
         results = results.filter(pl.col('tcov') >= min_tcov)
         results = results.collect()
@@ -294,11 +294,12 @@ class LocalSearch(Search):
                       name = result['name'],
                       taxon_name = result['taxon_name'],
                       taxon_id = result['taxon_id'],
-                      db = "local_clustered",
+                      db = "local",
                       filelabel = result['filelabel'],
-                      crossref_method = 'local_clustered',
+                      crossref_method = 'local',
                       evalue = result["evalue"],
-                      score = result["bits"],
+                      bitscore = result["bits"],
+                      alnlen = result['alnlen'],
                       seqid = result["pident"],
                       qcov = result["qcov"],
                       tcov = result["tcov"],

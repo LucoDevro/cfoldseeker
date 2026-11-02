@@ -39,18 +39,19 @@ class Hit:
         taxon_name (str): Name of the taxon in which this hit was found.
         taxon_id (int): Identifier of the taxon in which this hit was found.
         evalue (float): E-value of the FoldSeek hit.
-        score (int): FoldSeek alignment score.
+        bitscore (int): FoldSeek alignment bitscore.
         seqid (float): Sequence identity percentage with the query protein.
         qcov (float): Query coverage percentage.
         tcov (float): Target coverage percentage.
         scaff (str): RefSeq or GenBank ID of the scaffold encoding the hit.
         coords (list): Genomic coordinates of the encoding gene's exons.
         strand (str): DNA strand the encoding gene is located on ('+' or '-').
+        alnlen (int): Match alignment length in bp.
     """
     
     def __init__(self, db_id, query, crossref_id = None, crossref_method = '', name = '', 
-                 taxon_name = '', taxon_id = 0, db = "", filelabel = "", evalue = 1, score = 0, 
-                 seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = None, strand = ''):
+                 taxon_name = '', taxon_id = 0, db = "", filelabel = "", evalue = 1, bitscore = 0, 
+                 seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = None, strand = '', alnlen = 0):
         """
         Initialise a Hit object with FoldSeek search results and genomic information.
         
@@ -65,13 +66,14 @@ class Hit:
             db (str, optional): Structure database name. Defaults to "".
             filelabel (str, optional): Filelabel of the local files with the hit's sequences in case of local DBs. Defaults to ''.
             evalue (float, optional): E-value threshold. Defaults to 1.
-            score (int, optional): FoldSeek score. Defaults to 0.
+            bitscore (int, optional): FoldSeek bitscore. Defaults to 0.
             seqid (float, optional): Sequence identity percentage. Defaults to 0.
             qcov (float, optional): Query coverage percentage. Defaults to 0.
             tcov (float, optional): Target coverage percentage. Defaults to 0.
             scaff (str, optional): Scaffold ID. Defaults to ''.
             coords (list, optional): Exon coordinates. Defaults to [].
             strand (str, optional): DNA strand. Defaults to ''.
+            alnlen (int, optional): match alignment length in bp. Defaults to 0.
         """
         self.query: str = query #ID of the homologous query protein
         
@@ -87,10 +89,11 @@ class Hit:
         self.taxon_name: str = taxon_name #name of the taxon in which this hit was found
         self.taxon_id: int = taxon_id
         self.evalue: float = evalue #evalue of the FoldSeek hit
-        self.score: int = score #FoldSeek score
+        self.bitscore: int = bitscore #FoldSeek bitscore
         self.seqid: float = seqid #Sequence identity with the query protein
         self.qcov: float = qcov #Query coverage
         self.tcov: float = tcov #Target coverage
+        self.alnlen: int = alnlen #alignment length
         
         # Genomic properties
         self.scaff: str = scaff #RefSeq or GenBank ID of the scaffold encoding the hit
@@ -120,7 +123,8 @@ class Hit:
                 'taxon_id': self.taxon_id,
                 'filelabel': self.filelabel,
                 'evalue': self.evalue,
-                'score': self.score,
+                'bitscore': self.bitscore,
+                'alnlen': self.alnlen,
                 'seqid': self.seqid,
                 'qcov': self.qcov,
                 'tcov': self.tcov,
@@ -218,11 +222,13 @@ class Hit:
             bool: True if both hits are on the same scaffold and their genomic
                   coordinates completely overlap, False otherwise.
         """
-        return all(
+        location_criteria = (
             self.start() == other_hit.start(),
             self.end() == other_hit.end(),
             self.scaff == other_hit.scaff,
             )
+        
+        return all(location_criteria)
     
 
 class Cluster:
@@ -237,6 +243,7 @@ class Cluster:
         hits (list[Hit]): List of Hit objects in the cluster.
         number (int): Cluster identifier/rank number.
         score (int): Cumulative score of all hits in the cluster.
+        bitscore (int): Cumulative raw bitscore of all hits in the cluster. 
         start (int): Minimum genomic coordinate across all hits.
         end (int): Maximum genomic coordinate across all hits.
         length (int): Total length in base pairs of all exons across hits.
@@ -245,13 +252,15 @@ class Cluster:
         taxon_name (str): Taxonomic name (taken from first hit).
         filelabel (str): Filelabel of local sequence file (taken from first hit).
     """
-    def __init__(self, hits, number = 0):
+    def __init__(self, hits, number = 0, use_raw_score = False):
         """
         Initialise a Cluster object with a list of hits.
         
         Args:
             hits (list[Hit]): List of Hit objects to cluster together.
             number (int, optional): Cluster identifier number. Defaults to 0.
+            use_raw_score (bool, optional): Flags to use the raw bitscore as cluster score,
+                i.e. to not normalise each hit by alignment length before summing. Defaults to False.
             
         Raises:
             ValueError: If hits have non-unique scaffold, taxon ID, or taxon name attributes.
@@ -259,8 +268,12 @@ class Cluster:
         self.hits: list[Hit] = hits
         self.number: int = number
         
-        # Calculate cluster scores by summing hit scores
-        self.score: int = sum([h.score for h in self.hits])
+        # Calculate cluster score by summing (normalised) hit scores
+        self.bitscore = sum([h.bitscore for h in self.hits])
+        if use_raw_score:
+            self.score: int = self.bitscore
+        else:
+            self.score: int = sum([h.bitscore / h.alnlen for h in self.hits])
         
         # Cluster coordinates are defined as the most extreme coordinates
         self.start: int = min([h.start() for h in self.hits])
@@ -322,6 +335,7 @@ class Cluster:
         """
         return {'hits': ','.join([h.db_id for h in self.hits]),
                 'number': self.number,
+                'bitscore': self.bitscore,
                 'score': self.score,
                 'start': self.start,
                 'end': self.end,
@@ -481,7 +495,8 @@ class Search(ABC):
     
     
     def identify_clusters_from_groups(self, close_groups: list, max_length: int, min_hits: int,
-                                      min_covered_queries: int, require: set[str], all_layouts: bool):
+                                      min_covered_queries: int, require: set[str], all_layouts: bool,
+                                      use_raw_scores: bool):
         """
         Identify clusters from the proximal hit groups.
         
@@ -526,7 +541,7 @@ class Search(ABC):
                     all_paths_this_chain = [p for p in all_paths_this_chain if len(p) == max_path_length]
                     
                     # Create Cluster objects from these longest paths
-                    all_clusters_this_chain = [Cluster(p) for p in all_paths_this_chain]
+                    all_clusters_this_chain = [Cluster(p, use_raw_score = use_raw_scores) for p in all_paths_this_chain]
                     
                     # Apply intra-cluster filtering criteria
                     # Minimum number of hits
@@ -538,9 +553,9 @@ class Search(ABC):
                     # Maximum cluster length
                     all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain_filt if cl.length <= max_length]
                     
-                    # Keep only the best-scoring cluster layout if not all cluster layouts are requested
+                    # Keep only the cluster layout with the highest bitscore sum if not all cluster layouts are requested
                     if not(all_layouts) and len(all_clusters_this_chain_filt) > 0:
-                        all_clusters_this_chain_filt = [max(all_clusters_this_chain_filt, key = operator.attrgetter('score'))]
+                        all_clusters_this_chain_filt = [max(all_clusters_this_chain_filt, key = operator.attrgetter('bitscore'))]
                     
                     # Collect
                     all_clusters.append(all_clusters_this_chain_filt)
@@ -580,6 +595,7 @@ class Search(ABC):
         min_covered_queries: int = self.params['min_cov_qrs']
         require: list = self.params['require']
         all_layouts: bool = self.params['all_layouts']
+        use_raw_scores: bool = self.params['use_raw_scores']
         
         LOG.debug('Applying the following cluster identification criteria:')
         LOG.debug(f'maximum intergenic gap >= {max_gap}')
@@ -593,7 +609,8 @@ class Search(ABC):
         close_groups = self.identify_proximal_groups(max_gap = max_gap)
         ## Then identify clusters
         clusters = self.identify_clusters_from_groups(close_groups, max_length, min_hits,
-                                                      min_covered_queries,require, all_layouts)
+                                                      min_covered_queries,require, all_layouts,
+                                                      use_raw_scores)
         
         ## Abort if no clusters have been identified
         if len(clusters) == 0:
@@ -601,7 +618,7 @@ class Search(ABC):
             LOG.error(msg)
             raise RuntimeError(msg)
         
-        ## Rank overall by cluster score and add number
+        ### Rank clusters by chosen metric and renumber
         LOG.info('Sorting and renumbering by cluster score')
         clusters.sort(key = operator.attrgetter('score'), reverse = True)
         for idx,cl in enumerate(clusters):
@@ -634,7 +651,7 @@ class Search(ABC):
         all_hit_data = [h.as_dict() for h in self.hits]
         all_hit_data_df = pl.DataFrame(all_hit_data, schema = ['db_id', 'query', 'scaff', 'strand', 'coords', 'db', 'crossref_id',
                                                                'crossref_method', 'name', 'taxon_name', 'taxon_id', 'filelabel', 'evalue', 
-                                                               'score', 'seqid', 'qcov', 'tcov'])
+                                                               'bitscore', 'alnlen', 'seqid', 'qcov', 'tcov'])
         all_hit_data_df.write_csv(output_folder / 'hits.tsv', include_header = True, separator = "\t")
         
         # Then the clusters
@@ -840,7 +857,7 @@ class Search(ABC):
                                                       'identity': hit.seqid,
                                                       'coverage': hit.tcov,
                                                       'evalue': hit.evalue,
-                                                      'bitscore': hit.score}]
+                                                      'bitscore': hit.bitscore}]
                     cblaster_this_subject['name'] = hit.crossref_id
                     cblaster_this_subject['ipg'] = hit.db_id
                     cblaster_this_subject['start'] = hit.start()

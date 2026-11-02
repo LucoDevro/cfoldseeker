@@ -8,7 +8,6 @@ import logging
 import warnings
 import polars as pl
 import itertools as it
-from pathlib import Path
 from copy import deepcopy
 from tqdm.contrib.concurrent import thread_map
 from tqdm.contrib.logging import logging_redirect_tqdm
@@ -239,7 +238,7 @@ class RemoteSearch(Search):
             (bool): Dit the hit pass all criteria?
         """
         criteria_passes = (hit.evalue <= self.params['max_eval'],
-                           hit.score >= self.params['min_score'],
+                           hit.score >= self.params['min_bitscore'],
                            hit.seqid >= self.params['min_seqid'],
                            hit.qcov >= self.params['min_qcov'],
                            hit.tcov >= self.params['min_tcov'])
@@ -271,7 +270,7 @@ class RemoteSearch(Search):
         """
         
         LOG.debug('Applying the following hit filtering thresholds:')
-        LOG.debug(f'bitscore >= {self.params["min_score"]}')
+        LOG.debug(f'bitscore >= {self.params["min_bitscore"]}')
         LOG.debug(f'query coverage >= {self.params["min_qcov"]}')
         LOG.debug(f'target coverage >= {self.params["min_tcov"]}')
         LOG.debug(f'minimum sequence identity threshold >= {self.params["min_seqid"]}')
@@ -308,14 +307,27 @@ class RemoteSearch(Search):
                     taxon_name = hit_entry['taxName'] # taxon name
                     taxon_id = hit_entry['taxId'] # taxon ID
                     evalue = float(hit_entry['eval']) # FoldSeek e-value
-                    score = int(hit_entry['score']) # FoldSeek hit score
+                    alnlen = int(hit_entry['alnLength']) # alignment length
+                    bitscore = int(hit_entry['score']) # FoldSeek hit bitscore
                     seqid = float(hit_entry['seqId']) # Sequence identity with the query protein
                     qcov = (int(hit_entry['qEndPos']) - int(hit_entry['qStartPos'])) / int(hit_entry['qLen']) * 100 # Query coverage (in %)
                     tcov = (int(hit_entry['dbEndPos']) - int(hit_entry['dbStartPos'])) / int(hit_entry['dbLen']) * 100 # Target coverage (in %)
                     
                     # Create Hit object and add it if it passes all criteria
-                    hit = Hit(db_id, query, name = name, taxon_name = taxon_name, taxon_id = taxon_id, db = db,
-                                  evalue = evalue, score = score, seqid = seqid, qcov = qcov, tcov = tcov)
+                    hit = Hit(db_id = db_id, 
+                              query = query,
+                              name = name,
+                              taxon_name = taxon_name,
+                              taxon_id = taxon_id,
+                              db = db,
+                              evalue = evalue,
+                              bitscore = bitscore,
+                              seqid = seqid,
+                              qcov = qcov,
+                              tcov = tcov,
+                              alnlen = alnlen,
+                              )
+                    
                     if self.passes_criteria(hit):
                         all_hits.append(hit)
         
