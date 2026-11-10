@@ -60,8 +60,8 @@ class LocalSearch(Search):
             with columns: gene_tag, name, contig, strand, coords, taxon_id,
             taxon_name.
     """
-    def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
-                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, db_path, coord_db_path, params = None, hits = None, clusters = None,
+                 output_flags = None, output_folder = None, temp_folder = None):
         """
         Initialise a LocalSearch instance with database paths and parameters.
         
@@ -74,7 +74,7 @@ class LocalSearch(Search):
             coord_db_path: Path to the CDS coordinates database file (tab-separated,
                 no header).
             params: Dictionary of search parameters (e.g., min_seqid, max_eval,
-                min_score). Defaults to empty dict.
+                min_bitscore). Defaults to empty dict.
             hits: List of Hit objects from previous searches. Defaults to empty list.
             clusters: List of gene clusters from previous analysis. Defaults to
                 empty list.
@@ -142,15 +142,17 @@ class LocalSearch(Search):
                str(self.TEMP_DIR / 'foldseek_tmp'),
                "--format-mode", '4',
                "--input-format", '2',
-               '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,evalue,bits',
+               '--format-output', 'query,target,qstart,qend,tstart,tend,pident,qcov,tcov,evalue,bits,alnlen',
                '-v', foldseek_verbosity,
                "--min-seq-id", str(self.params['min_seqid']),
                '-e', str(self.params['max_eval']),
                '--threads', str(self.params['cores']),
-               '--exhaustive-search', '1'
+               '--gpu', str(int(self.params['gpu'])),
+               '--prefilter-mode', '2',
                ]
         
         # Launching search process
+        LOG.info('Running FoldSeek')
         LOG.debug(f'Running command: {" ".join(cmd)}')
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
@@ -194,7 +196,7 @@ class LocalSearch(Search):
         The following filtering thresholds are applied:
         1. Sequence identity >= min_seqid
         2. E-value <= max_eval
-        3. Bit score >= min_score
+        3. Bit score >= min_bitscore
         4. Query coverage >= min_qcov (converted to percentage)
         5. Target coverage >= min_tcov (converted to percentage)
         
@@ -202,7 +204,7 @@ class LocalSearch(Search):
             results (polars.DataFrame): A filtered FoldSeek hits table
         """
         ## Load the thresholds from params
-        min_score = self.params['min_score']
+        min_bitscore = self.params['min_bitscore']
         min_qcov = self.params['min_qcov']
         min_tcov = self.params['min_tcov']
         min_seqid = self.params['min_seqid']
@@ -222,13 +224,13 @@ class LocalSearch(Search):
         LOG.debug('Applying the following thresholds:')
         LOG.debug(f'sequence identity >= {min_seqid}')
         LOG.debug(f'evalue <= {max_eval}')
-        LOG.debug(f'bitscore >= {min_score}')
+        LOG.debug(f'bitscore >= {min_bitscore}')
         LOG.debug(f'query coverage >= {min_qcov}')
         LOG.debug(f'target coverage >= {min_tcov}')
         
         results = results.filter(pl.col('pident') >= min_seqid)
         results = results.filter(pl.col('evalue') <= max_eval)
-        results = results.filter(pl.col('bits') >= min_score)
+        results = results.filter(pl.col('bits') >= min_bitscore)
         results = results.filter(pl.col('qcov') >= min_qcov)
         results = results.filter(pl.col('tcov') >= min_tcov)
         results = results.collect()
@@ -260,12 +262,12 @@ class LocalSearch(Search):
         """
         ## Add genomic context from CDS DB
         # Identify which genes remained after filtering
-        filtered_genes = results.select('target').unique()
+        filtered_genes = results.select('target').unique().to_series().to_list() # List conversion for efficient filtering down
         
         # Prefilter context DB for these genes
         LOG.info('Prefiltering context DB')
-        coord_db_filt = self.coord_db.filter(pl.col('gene_tag').is_in(filtered_genes['target']))
-        coord_db_filt = coord_db_filt.collect() # Materialise for join efficiency
+        coord_db_filt = self.coord_db.filter(pl.col('gene_tag').is_in(filtered_genes))
+        coord_db_filt = coord_db_filt.collect() # Materialise for efficiency of the next join
         
         ## Join with context DB
         LOG.info('Fetching CDS coordinates from context DB')
@@ -291,11 +293,12 @@ class LocalSearch(Search):
                       name = result['name'],
                       taxon_name = result['taxon_name'],
                       taxon_id = result['taxon_id'],
-                      db = "local_clustered",
+                      db = "local",
                       filelabel = result['filelabel'],
-                      crossref_method = 'local_clustered',
+                      crossref_method = 'local',
                       evalue = result["evalue"],
-                      score = result["bits"],
+                      bitscore = result["bits"],
+                      alnlen = result['alnlen'],
                       seqid = result["pident"],
                       qcov = result["qcov"],
                       tcov = result["tcov"],
@@ -321,6 +324,9 @@ class LocalSearch(Search):
         
         Returns:
             None
+            
+        Mutates:
+            self.hits: Instantiates the list of identified Hit objects.
         """
         # Parses FoldSeek results and applies hit-level filtering
         parsed_results = self.parse_foldseek_results()
@@ -328,6 +334,26 @@ class LocalSearch(Search):
         # Adds genomic context and instantiates Hit objects
         self.collect_hits(parsed_results)
         
+        return None
+    
+    
+    def search_homologs(self) -> None:
+        """
+        Search structural homologs of each query protein.
+        
+        Launches a FoldSeek call in case no earlier results table has been supplied.
+        
+        Returns:
+            None
+        """
+        reuse_file = self.params['reuse_search']
+        if reuse_file and reuse_file.is_file():
+            LOG.info('Reusing earlier FoldSeek search result')
+            shutil.copy(self.params['reuse_search'], self.TEMP_DIR / 'foldseek_result.txt')
+        else:
+            LOG.info('Launching FoldSeek search')
+            self.run_foldseek()
+            
         return None
     
     
@@ -343,8 +369,8 @@ class LocalSearch(Search):
             None
         """
         
-        LOG.info('STARTING PART 1: Executing FoldSeek search')
-        self.run_foldseek()
+        LOG.info('STARTING PART 1: Searching homologs')
+        self.search_homologs()
         LOG.info("FINISHED PART 1")
         
         LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")

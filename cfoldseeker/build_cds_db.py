@@ -6,10 +6,11 @@ import sys
 import gzip
 import logging
 import tempfile
+import gb_io
 import polars as pl
-from Bio import SeqIO, Entrez
+from Bio import Entrez
 from pathlib import Path
-from itertools import batched, chain
+from itertools import batched, chain, tee
 from csv import DictWriter
 from functools import partial
 from tqdm import tqdm
@@ -180,7 +181,7 @@ def parse_and_validate_arguments(args: argparse.Namespace) -> dict:
     return parsed_args
 
 
-def read_genome(file: str | Path):
+def read_file(file: str | Path, mode: str = 't'):
     """
     Open the appropriate file handle for a genome file.
     
@@ -188,16 +189,64 @@ def read_genome(file: str | Path):
     
     Args:
         file (str | Path): genome file to open
+        mode (str): file mode (text ('t'; default) or binary ('b'))
         
     Returns:
         handle: A file handle to open the genome file
     """
     if '.gz' in Path(file).suffixes:
-        handle = gzip.open(file, mode = 'rt')
+        handle = gzip.open(file, mode = f'r{mode}')
     else:
         handle = open(file, mode = 'r')
         
     return handle
+
+
+def _get_location_string(location) -> str:
+    """
+    Construct a location string for a gb_io Location object.
+    
+    Recursively constructs a location string by accessing the underlying objects
+    differently for each gb_io Location class.
+    
+    Args:
+        location (any gb_io location class (Join, Complement, Range)): Location object
+        
+    Returns:
+        location (str): A formatted location string, or a child location object to be accessed deeper
+    """
+    match type(location):
+        case gb_io.Complement:
+            return _get_location_string(location.location)
+        case gb_io.Join:
+            return ','.join(map(_get_location_string, location.locations))
+        case gb_io.Range:
+            return '..'.join([str(location.start), str(location.end)])
+        case _:
+            raise ValueError("Unsupported location class!")
+            
+            
+def _get_strand_string(location) -> str:
+    """
+    Construct a strand string for a gb_io Location object.
+    
+    Determine strand location from the gb_io object class.
+    
+    Args: 
+        location (any gb_io location class (Join, Complement, Range)): Location object
+        
+    Returns:
+        strand (str): Positive ('+') or negative ('-') strand
+    """
+    match type(location):
+        case gb_io.Complement:
+            return '-'
+        case gb_io.Join:
+            return '+'
+        case gb_io.Range:
+            return '+'
+        case _:
+            raise ValueError("Unsupported location class!")
 
 
 def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in_package: bool = False) -> None:
@@ -221,9 +270,9 @@ def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in
     file = numbered_filepath[1]
     cds_records = []
     
-    with read_genome(file) as handle:
+    with read_file(file) as handle:
         # First parse the Genbank
-        records = list(SeqIO.parse(handle, 'genbank'))
+        records, first_record = tee(gb_io.iter(handle))
         
         # Get filename
         if in_package:
@@ -232,33 +281,32 @@ def _add_one_ncbi_genbank_to_db(numbered_filepath: tuple, writer: DictWriter, in
             filelabel = file.with_suffix('.gz').with_suffix('').with_suffix('').name
         
         # Get taxon id
-        first_source_feature = [feat for feat in records[0].features if feat.type == 'source'][0]
-        first_source_feature_dbxrefs = first_source_feature.qualifiers['db_xref']
-        taxon_id = [xref for xref in first_source_feature_dbxrefs if 'taxon:' in xref][0]
-        taxon_id = int(taxon_id.split(':')[1])
+        first_record = next(first_record)
+        first_source_feature = next(filter(lambda x: x.kind == 'source', first_record.features))
+        first_source_feature_dbxrefs = filter(lambda x: x.key == 'db_xref', first_source_feature.qualifiers)
+        taxon_id = next(filter(lambda x: 'taxon:' in x.value, first_source_feature_dbxrefs))
+        taxon_id = int(taxon_id.value.split(':')[1])
         
         # Parse all CDS features
         for record in records:
-            cds_features = [feat for feat in record.features if feat.type == 'CDS']
+            cds_features = filter(lambda x: x.kind == "CDS", record.features)
             for feature in cds_features:
-                
                 # Try to fetch all necessary data for a CDS record
                 try:
-                    coord_intervals = ['..'.join([str(part.start), str(part.end)]) 
-                                       for part in feature.location.parts]
+                    qualifiers = {q.key: q.value for q in feature.qualifiers}
                     cds_record = {
-                        'gene_tag': feature.qualifiers['protein_id'][0],
-                        'name': feature.qualifiers['product'][0],
-                        'contig': record.id,
-                        'coords': ','.join(coord_intervals),
-                        'strand': '{0:+}'.format(feature.location.strand)[0],
+                        'gene_tag': qualifiers['protein_id'],
+                        'name': qualifiers['product'],
+                        'contig': record.version,
+                        'coords': _get_location_string(feature.location),
+                        'strand': _get_strand_string(feature.location),
                         'taxon_id': taxon_id,
                         'filelabel': filelabel,
                         }
                     
                     cds_records.append(cds_record)
                     
-                # If some data is lacking, ignore this entry
+                # If some qualifiers are lacking, ignore this entry
                 except KeyError:
                     continue
     
@@ -287,11 +335,11 @@ def _add_one_bakta_genbank_to_db(numbered_filepath: tuple, writer: DictWriter) -
     file = numbered_filepath[1]
     cds_records = []
     
-    with read_genome(file) as handle:
+    with read_file(file) as handle:
         # First parse the Genbank
-        records = list(SeqIO.parse(handle, 'genbank'))
+        records = gb_io.iter(handle)
         
-        # Get filelabel
+        # Get filename
         filelabel = file.with_suffix('.gz').with_suffix('').with_suffix('').name
         
         # Assign generic taxon id
@@ -299,26 +347,24 @@ def _add_one_bakta_genbank_to_db(numbered_filepath: tuple, writer: DictWriter) -
         
         # Parse all CDS features
         for record in records:
-            cds_features = [feat for feat in record.features if feat.type == 'CDS']
+            cds_features = filter(lambda x: x.kind == "CDS", record.features)
             for feature in cds_features:
-                
                 # Try to fetch all necessary data for a CDS record
                 try:
-                    coord_intervals = ['..'.join([str(part.start), str(part.end)]) 
-                                       for part in feature.location.parts]
+                    qualifiers = {q.key: q.value for q in feature.qualifiers}
                     cds_record = {
-                        'gene_tag': feature.qualifiers['locus_tag'][0],
-                        'name': feature.qualifiers['product'][0],
-                        'contig': record.id,
-                        'coords': ','.join(coord_intervals),
-                        'strand': '{0:+}'.format(feature.location.strand)[0],
+                        'gene_tag': qualifiers['locus_tag'],
+                        'name': qualifiers['product'],
+                        'contig': record.version,
+                        'coords': _get_location_string(feature.location),
+                        'strand': _get_strand_string(feature.location),
                         'taxon_id': taxon_id,
                         'filelabel': filelabel,
                         }
                     
                     cds_records.append(cds_record)
                     
-                # If some data is lacking, ignore this entry
+                # If some qualifiers are lacking, ignore this entry
                 except KeyError:
                     continue
     
@@ -346,7 +392,8 @@ def _add_one_tsv_to_db(numbered_filepath: tuple, writer: DictWriter) -> None:
     Note:
         Genomic coordinates (coords) are expected to already have been formatted as joined exons. Example: "1..100,105..200".
     """
-    # Envisioned header: ['gene_tag', 'name', 'contig', 'coords', 'strand', 'taxon_id', 'filelabel']
+    # Envisioned header: 
+    # 'gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'taxon_name', 'filelabel'
     df = pl.scan_csv(numbered_filepath[1], separator = "\t", has_header = True, comment_prefix = '#')
     
     # Check out the CDS records
@@ -378,7 +425,8 @@ def parse_files(input_path: Path, parsing_mode: str, temp_cds_db_path: Path,
         with columns: gene_tag, name, contig, coords, strand, taxon_id, and filename
         (or taxon_name for TSV formats).
     """
-    # Select the right workflows
+    # Select the right workflow type
+    fieldnames = ['gene_tag', 'name', 'contig', 'strand', 'coords', 'taxon_id', 'filelabel']
     match parsing_mode:
         case 'ncbi-gbff':
             LOG.info('Parsing all input files as NCBI Genbanks')
@@ -396,16 +444,14 @@ def parse_files(input_path: Path, parsing_mode: str, temp_cds_db_path: Path,
             LOG.info('Parsing all input files as TSVs')
             parser = _add_one_tsv_to_db
             files = input_path.glob('*.tsv')
-    inputs = enumerate(files)
+            fieldnames.insert(-1, 'taxon_name')
             
     # Parse all Genbanks and write them to a temporary TSV.GZ file
-    fieldnames = ['gene_tag', 'name', 'contig', 'coords', 'strand', 'taxon_id', 'filelabel']
     with gzip.open(temp_cds_db_path, 'wt') as out_handle:
-        writer = DictWriter(out_handle, fieldnames, delimiter = '\t')
+            writer = DictWriter(out_handle, fieldnames, delimiter = '\t')
+            for numbered_filepath in tqdm(list(enumerate(files)), leave = False, disable = no_progress): 
+                parser(numbered_filepath, writer)
         
-        for numbered_filepath in tqdm(list(inputs), leave = False, disable = no_progress): 
-            parser(numbered_filepath = numbered_filepath, writer = writer)
-       
     # Return a LazyFrame entrypoint
     cds_db = pl.scan_csv(temp_cds_db_path, separator = "\t", has_header = False, new_columns = fieldnames)
                 
@@ -414,15 +460,15 @@ def parse_files(input_path: Path, parsing_mode: str, temp_cds_db_path: Path,
 
 def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyFrame:
     """
-    Check for and attempt to fix duplicate contig labels per taxon.
+    Check for and attempt to fix identical contig labels occurring in distinct files.
     
-    Detects cases where the same contig label appears in multiple taxa. For
+    Detects cases where the same contig label appears in multiple files. For
     Bakta files, attempts to prepend the existing locus tag prefix to make contigs
-    unique. For other formats, exits with an error.
+    unique. For other formats, exits with a NotImplemented error.
     
     Args:
         cds_db (polars.LazyFrame): A dataframe containing CDS records with 'contig',
-            'taxon_id', and 'gene_tag' columns.
+            'filelabel', and 'gene_tag' columns.
         parsing_mode (str)): The format mode used for parsing.
     
     Returns:
@@ -434,22 +480,28 @@ def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyF
             was applied (Bakta mode only).
                 
     Raises:
-        RuntimeError: If duplicate contigs are detected and cannot be fixed, or if
-            fix attempt fails.
+        RuntimeError: If duplicate contigs are detected and the fix failed
+        NotImplementedError: If duplicate contigs are detected for file formats
+            for which no fix has been implemented.
         
     Note:
-        This function contains a potential local partial materialisation of the LazyFrame.
-        This triggers all files to be parsed.
+        This function contains a local partial materialisation of the CDS DB LazyFrame.
+        This triggers all Genbank files to be parsed.
     """
     LOG.info('Checking for duplicate contig labels')
     
-    # Check that no contig label occurs in combination with multiple taxon IDs
-    contig_taxa_combs = cds_db.select(['contig', 'taxon_id']).group_by(['contig']).agg(pl.col('taxon_id').unique())
-    contig_taxa_combs = contig_taxa_combs.collect() # Local materialisation
-    nb_contig_taxa_combs = contig_taxa_combs.with_columns(nb_combs = pl.col('taxon_id').list.len())
-    multi_taxa_contig = nb_contig_taxa_combs['nb_combs'] > 1
-    if multi_taxa_contig.any():
-        LOG.error("Detected duplicate contig labels for a taxon!")
+    # Lazyframe collection plan to check that no contig label occurs in combination with multiple file labels
+    multi_contig_taxa_combs_lazy = (
+        cds_db.select(['contig', 'filelabel'])
+        .group_by(['contig'])
+        .agg(pl.col('filelabel').n_unique()
+             .alias('frequency'))
+        .filter(pl.col('frequency') > 1)
+        )
+    
+    # Execute lazyframe collection plan for the current situation
+    if not multi_contig_taxa_combs_lazy.collect().is_empty():
+        LOG.error("Found different files with identically labelled contigs!")
         
         # In case of Bakta files, we may still fix this if Bakta autogenerated a unique locus tax prefix,
         # by prepending that locus tag prefix
@@ -461,30 +513,69 @@ def check_duplicate_contigs(cds_db: pl.LazyFrame, parsing_mode: str) -> pl.LazyF
             cds_db = cds_db.with_columns(contig = pl.concat_str(['contig', 'locus_tag_prefix'], separator = '_'))
             cds_db = cds_db.drop('locus_tag_prefix')
             
-            # Check if fix succeeded
-            # => No contig label occurring in combination with multiple taxon IDs
-            contig_taxa_combs_fixed = cds_db.group_by(['contig']).agg(pl.col('taxon_id').unique())
-            nb_contig_taxa_combs_fixed = contig_taxa_combs_fixed.with_columns(nb_combs = pl.col('taxon_id').list.len())
+            # Reexecute collection plan after fix to check if fix succeeded
+            # => No contig label occurring in combination with multiple file labels
+            multi_contig_taxa_combs_fixed = multi_contig_taxa_combs_lazy.collect().is_empty()
             
-            multi_taxa_contig_fixed = nb_contig_taxa_combs_fixed['nb_combs'] > 1
-            contigs_fixed_counts = not(cds_db.select('contig').is_duplicated().any())
-            
-            # If Not all contig labels are unique despite the fix
-            if multi_taxa_contig_fixed.any() and contigs_fixed_counts:
+            # If not all contig labels are unique despite the fix
+            if multi_contig_taxa_combs_fixed:
                 msg = 'Duplicate gene tag fix failed! Exiting.'
                 LOG.critical(msg)
                 raise RuntimeError(msg)
+            # If fix succeeded
             else:
                 LOG.warning('Fix succeeded, but I had to change your contig labels!')
         
-        # For other input types, we don't provide a potential fix
+        # For other input types, we don't implement a potential fix
         else:
-            msg = "Duplicate contig labels detected for a taxon! No fix provided for this parsing mode."
+            msg = "No fix implemented for this parsing mode."
             LOG.critical(msg)
-            raise RuntimeError(msg)
+            raise NotImplementedError(msg)
             
     return cds_db
 
+
+def check_duplicate_protein_ids(cds_db: pl.LazyFrame) -> pl.DataFrame:
+    """
+    Check for identical protein IDs occurring in distinct files.
+    
+    Detects cases where the same protein ID appears in multiple files. Throws a warning if any found.
+    
+    Args:
+        cds_db (polars.LazyFrame): A lazyframe containing CDS records with 'contig',
+            'filelabel', and 'gene_tag' columns.
+            
+    Returns:
+        multi_protein_taxa_combs (polars.DataFrame): A dataframe containing the 
+            CDS records with duplicate protein IDs.
+    
+    Note:
+        This function contains a local partial materialisation of the CDS DB LazyFrame.
+        This triggers all Genbank files to be parsed.
+    """
+    LOG.info('Checking for duplicate protein IDs')
+    
+    # Get all protein IDs that occur in combination with multiple file labels
+    multi_protein_taxa_combs_ids = (
+        cds_db.select(['gene_tag', 'filelabel'])
+        .group_by('gene_tag')
+        .agg(pl.col('filelabel').n_unique()
+             .alias('frequency'))
+        .filter(pl.col('frequency') > 1)
+        .select(pl.col('gene_tag'))
+        ).collect().to_series().to_list()
+    
+    # Fetch their CDS records
+    multi_protein_taxa_combs_frame = cds_db.filter(pl.col('gene_tag').is_in(multi_protein_taxa_combs_ids)).collect()
+    
+    # Should be empty when there are no duplicate protein IDs
+    if not multi_protein_taxa_combs_frame.is_empty():
+        LOG.warning("Found different files with identically labelled proteins!")
+        LOG.warning("CDS records with duplicate protein IDs will be listed in the file 'duplicate_protein_ids' in your output folder.")
+        LOG.warning("Please check there whether these proteins are legitimately identically labelled (e.g. NCBI identical protein groups).")
+        
+    return multi_protein_taxa_combs_frame
+        
 
 def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_file: Path, 
                      parsing_mode: str, batch_size: int = 250, max_attempts: int = 5) -> pl.LazyFrame:
@@ -589,9 +680,15 @@ def set_taxon_labels(cds_db: pl.LazyFrame, fetch_taxa_auto: bool, fetch_taxa_fil
                 LOG.info('Using filenames as taxon names')
                 cds_db = cds_db.with_columns(pl.col('filelabel').alias('taxon_name'))
                
-        # For other parsing modes, keep the user's annotations
-        case _:
+        # In tsv mode, keep the user's annotations
+        case 'tsv':
             pass
+        
+        # Catch problems
+        case _:
+            msg = f'Unknown parsing mode: {parsing_mode}'
+            LOG.critical(msg)
+            raise RuntimeError(msg)
             
     return cds_db
 
@@ -658,8 +755,13 @@ def run_workflow(parsed_args: dict) -> None:
     # Parse the input files
     cds_db = parse_files(input_path, parsing_mode, temp_cds_db_path = temp_cds_db_path, no_progress = no_progress)
     
-    # Check for duplicate contig labels
+    # Check for duplicate protein ID and contig labels
     cds_db = check_duplicate_contigs(cds_db, parsing_mode)
+    duplicate_protein_IDs = check_duplicate_protein_ids(cds_db)
+    if not duplicate_protein_IDs.is_empty():
+        LOG.info('Writing duplicate protein IDs file')
+        duplicate_protein_IDs.write_csv(output_path.parent / 'duplicate_protein_ids.txt', separator = "\t",
+                                        include_header = False)
     
     # Keep taxon names as assembly labels or use the filenames
     cds_db = set_taxon_labels(cds_db, fetch_taxa_auto, fetch_taxa_file, parsing_mode)

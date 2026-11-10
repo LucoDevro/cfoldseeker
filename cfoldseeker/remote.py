@@ -3,11 +3,11 @@
 
 import re
 import json
+import shutil
 import logging
 import warnings
 import polars as pl
 import itertools as it
-from pathlib import Path
 from copy import deepcopy
 from tqdm.contrib.concurrent import thread_map
 from tqdm.contrib.logging import logging_redirect_tqdm
@@ -45,8 +45,8 @@ class RemoteSearch(Search):
         Local: Sister class providing the search and parsing capabilities for local database searches
     """
     
-    def __init__(self, query, mapping_table_path, params = {}, hits = [], clusters = [], 
-                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, mapping_table_path, params = None, hits = None, clusters = None, 
+                 output_flags = None, output_folder = None, temp_folder = None):
         """
         Initialise a RemoteSearch instance.
         
@@ -197,6 +197,39 @@ class RemoteSearch(Search):
         return None
     
     
+    def search_homologs(self):
+        """
+        Search structural homologs of each query protein.
+        
+        Launches a FoldSeek webserver call in case no earlier results have been supplied.
+        
+        Returns:
+            None
+            
+        Mutates:
+            self.hits: Populates a temporary dictionary with parsed result json files
+        """
+        reuse_files = self.params['reuse_search']
+        if reuse_files and reuse_files.is_dir():
+            LOG.info('Reusing earlier FoldSeek search results')
+            
+            # Reconstruct the unparsed hits attribute as constructed by run_foldseek()
+            all_results = {}
+            for results_file in reuse_files.glob('*.json'):
+                shutil.copy(results_file, self.TEMP_DIR) # Copy results file to temp folder for consistency
+                query = results_file.stem.split('_')[-1] # Read query name from filename
+                with open(results_file, 'r') as handle:
+                    result = json.load(handle)
+                all_results[query] = result
+                
+            self.hits = all_results
+        else:
+            LOG.info('Launching FoldSeek search')
+            self.run_foldseek()
+            
+        return None
+    
+    
     def passes_criteria(self, hit: Hit):
         """
         Check if a hit passes the criteria set for this search.
@@ -205,7 +238,7 @@ class RemoteSearch(Search):
             (bool): Dit the hit pass all criteria?
         """
         criteria_passes = (hit.evalue <= self.params['max_eval'],
-                           hit.score >= self.params['min_score'],
+                           hit.score >= self.params['min_bitscore'],
                            hit.seqid >= self.params['min_seqid'],
                            hit.qcov >= self.params['min_qcov'],
                            hit.tcov >= self.params['min_tcov'])
@@ -229,12 +262,15 @@ class RemoteSearch(Search):
         Raises:
             RuntimeError: If the hit list is empty after applying the criteria
             
+        Mutates:
+            self.hits: Instantiates the list of identified Hit objects.
+            
         Note:
             Logs a warning when there are no hits for a certain query and DB pair.
         """
         
         LOG.debug('Applying the following hit filtering thresholds:')
-        LOG.debug(f'bitscore >= {self.params["min_score"]}')
+        LOG.debug(f'bitscore >= {self.params["min_bitscore"]}')
         LOG.debug(f'query coverage >= {self.params["min_qcov"]}')
         LOG.debug(f'target coverage >= {self.params["min_tcov"]}')
         LOG.debug(f'minimum sequence identity threshold >= {self.params["min_seqid"]}')
@@ -271,14 +307,27 @@ class RemoteSearch(Search):
                     taxon_name = hit_entry['taxName'] # taxon name
                     taxon_id = hit_entry['taxId'] # taxon ID
                     evalue = float(hit_entry['eval']) # FoldSeek e-value
-                    score = int(hit_entry['score']) # FoldSeek hit score
+                    alnlen = int(hit_entry['alnLength']) # alignment length
+                    bitscore = int(hit_entry['score']) # FoldSeek hit bitscore
                     seqid = float(hit_entry['seqId']) # Sequence identity with the query protein
                     qcov = (int(hit_entry['qEndPos']) - int(hit_entry['qStartPos'])) / int(hit_entry['qLen']) * 100 # Query coverage (in %)
                     tcov = (int(hit_entry['dbEndPos']) - int(hit_entry['dbStartPos'])) / int(hit_entry['dbLen']) * 100 # Target coverage (in %)
                     
                     # Create Hit object and add it if it passes all criteria
-                    hit = Hit(db_id, query, name = name, taxon_name = taxon_name, taxon_id = taxon_id, db = db,
-                                  evalue = evalue, score = score, seqid = seqid, qcov = qcov, tcov = tcov)
+                    hit = Hit(db_id = db_id, 
+                              query = query,
+                              name = name,
+                              taxon_name = taxon_name,
+                              taxon_id = taxon_id,
+                              db = db,
+                              evalue = evalue,
+                              bitscore = bitscore,
+                              seqid = seqid,
+                              qcov = qcov,
+                              tcov = tcov,
+                              alnlen = alnlen,
+                              )
+                    
                     if self.passes_criteria(hit):
                         all_hits.append(hit)
         
@@ -606,7 +655,7 @@ class RemoteSearch(Search):
                         all_new_scaffold_ids = [l.rstrip() for l in handle.readlines()]
                     break
                 except:
-                    if attempt < max_attempts:
+                    if attempt+1 < max_attempts:
                         LOG.warning(f'Failed getting version digits from NCBI in attempt {attempt+1}. Max. attempts: {max_attempts}')
                     else:
                         msg = f'Failed getting version digits from NCBI in {max_attempts} attempts!'
@@ -703,8 +752,8 @@ class RemoteSearch(Search):
             None
         """
         
-        LOG.info("STARTING PART 1: Executing FoldSeek search")
-        self.run_foldseek()
+        LOG.info("STARTING PART 1: Searching homologs")
+        self.search_homologs()
         LOG.info('FINISHED PART 1')
         
         LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")

@@ -161,7 +161,7 @@ def pull_from_ena(entry: str, max_retries: int = 3) -> None | str:
                     trials += 1
                     time.sleep(5)
                 case 404:
-                    LOG.warning(f'Entry {entry} not found. Aborting.')
+                    LOG.warning(f'Entry {entry} not found.')
                     return None
                 case _:
                     LOG.warning(f'Error pulling GenPept entry {entry}. Code returned: {response.status_code}. Retrying.')
@@ -208,7 +208,7 @@ def pull_from_unisave(entry: str, max_retries: int = 3) -> None | str:
                     trials += 1
                     time.sleep(5)
                 case 404:
-                    LOG.warning(f'Entry {entry} not found. Aborting.')
+                    LOG.warning(f'Entry {entry} not found.')
                     return None
                 case _:
                     LOG.warning(f'Error pulling UniSave record {entry}. Code returned: {response.status_code}. Retrying.')

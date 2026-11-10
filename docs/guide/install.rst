@@ -35,17 +35,17 @@ Then start using it by activating the conda environment.
 Docker
 -------
 
-cfoldseeker is also available as a Docker image from DockerHub. This is one of the recommended ways to run cfoldseeker on Windows (the other one being running it using Windows' WSL feature).
+cfoldseeker is also available as a Docker image from DockerHub. This is one of the recommended ways to run cfoldseeker on Windows (the other one being running it using Windows' WSL feature). Run the following command to pull the container, adding one of the `possible version tags <https://quay.io/repository/biocontainers/cfoldseeker?tab=tags>`_.
 
 .. code-block:: bash
 
-	docker pull lucodevro/cfoldseeker
+	docker pull quay.io/repository/biocontainers/cfoldseeker:<tag>
 
 There is no entrypoint set up so running cfoldseeker requires prepending your cfoldseeker command with the appropriate Docker commands.
 
 .. code-block:: bash
 
-	docker run lucodevro/cfoldseeker -v <some-input-file-or-folder>:<path-you-want-it-inside-the-container> cfoldseeker [-<flags>] [arguments]
+	docker run quay.io/repository/biocontainers/cfoldseeker:<tag> -v <some-input-file-or-folder>:<path-you-want-it-inside-the-container> cfoldseeker [-<flags>] [arguments]
 
 GitHub
 -------
@@ -59,7 +59,7 @@ Alternatively, it is possible to install the latest semi-stable development vers
 PyPi
 ------
 
-cfoldseeker is also installable from PyPi using pip, yet we do not recommend using this approach as its core dependency FoldSeek is not available from PyPi, and therefore should be installed beforehand. So either make sure you have installed it separately, or use one of the other installation options.
+cfoldseeker is also installable from PyPi using pip.
 
 .. code-block:: bash
 

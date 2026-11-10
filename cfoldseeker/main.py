@@ -8,6 +8,7 @@ import logging
 import tempfile
 from pathlib import Path
 from importlib.metadata import version
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 
 from cfoldseeker.remote import RemoteSearch
 from cfoldseeker.local import LocalSearch
@@ -61,7 +62,7 @@ def create_parser() -> argparse.ArgumentParser:
     args_general.add_argument('-h', '--help', action = 'help', help = "Show this help message and exit")
     
     args_io = parser.add_argument_group('Inputs and outputs')
-    args_io.add_argument('-q', '--query', dest = 'query_folder', required = True, type = Path, help = "Path of the folder containing the query proteins.")
+    args_io.add_argument('-q', '--query', dest = 'query_folder', type = Path, default = Path('.'), help = "Path of the folder containing the query proteins.")
     args_io.add_argument('-o', '--output', dest = 'output', type = Path, default = Path('.'), help = "Output directory (default: current location)")
     args_io.add_argument('-t', '--temp', dest = "temp", type = Path, default = Path(tempfile.gettempdir()), help = "Path to store temporary files (default: your OS's default temporary directory).")
     args_io.add_argument('--no-tables', dest = 'output_tables', default = True, action = 'store_false', help = "Don't write overview tables (default: false).")
@@ -75,7 +76,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     args_search = parser.add_argument_group('General search options')
     args_search.add_argument('--max-eval', dest = "max_eval", type = float, default = 1e-9, help = "Maximum e-value to include a FoldSeek hit (default: 1e-9).")
-    args_search.add_argument('--min-score', dest = "min_score", type = float, default = 250, help = "Minimum FoldSeek bitscore to include a hit (default: 250).")
+    args_search.add_argument('--min-bitscore', dest = "min_bitscore", type = float, default = 250, help = "Minimum FoldSeek bitscore to include a hit (default: 250).")
     args_search.add_argument('--min-seqid', dest = "min_seqid", type = float, default = 0, help = "Minimum sequence identity to include a hit (in percentages) (default: 0).")
     args_search.add_argument('--min-qcov', dest = "min_qcov", type = float, default = 50, help = "Minimum query coverage to include a hit (in percentages) (default: 50).")
     args_search.add_argument('--min-tcov', dest = "min_tcov", type = float, default = 50, help = "Minimum target coverage to include a hit (in percentages) (default: 50).")
@@ -84,7 +85,10 @@ def create_parser() -> argparse.ArgumentParser:
     args_search.add_argument('--min-hits', dest = "min_hits", type = int, default = 2, help = "Minimum number of members in a cluster (default: 2).")
     args_search.add_argument('--min-cov-qrs', dest = "min_cov_qrs", type = int, default = 2, help = "Minimum different queries covered by a cluster (default: 2).")
     args_search.add_argument('--require', dest = "require", type = str, default = '', nargs = '*', help = "Queries that have to present in a cluster (use filenames without extensions).")
-    args_search.add_argument('--all-layouts', dest = 'all_layouts', default = False, action = 'store_true', help = "Include cluster layouts matching all criteria but with a less-than-best score (default: False).")
+    args_search.add_argument('--use-raw-scores', dest = "use_raw_scores", default = False, action = "store_true",
+                             help = "Sum raw bitscores to rank the identified clusters rather than the ones normalised by alignment length. Pushes cfoldseeker to focus on the longer proteins of your query, but risks these overdominate the cluster ranking. (default: false).")
+    args_search.add_argument('--all-layouts', dest = 'all_layouts', default = False, action = 'store_true',
+                             help = "Include cluster layouts matching all criteria but with a less-than-best score (default: False).")
     
     args_remote = parser.add_argument_group("Remote-specific search options")
     args_remote.add_argument('-rdb', '--remote-db', dest = 'db', type = str, default = ['afdb50'], nargs = '+', choices = ['afdb-proteome', 'afdb-swissprot', 'afdb50'], 
@@ -96,7 +100,11 @@ def create_parser() -> argparse.ArgumentParser:
     args_remote.add_argument('-w', '--max-workers', dest = "max_workers", type = int, default = 1, help = "Maximum number of workers to query the remote servers (FoldSeek, KEGG, ENA) (default: 1)")
     
     args_local = parser.add_argument_group('Local-specific search options')
-    args_local.add_argument('-ldb', '--local-db', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
+    args_local.add_argument('--gpu', dest = 'gpu', default = False, action = "store_true", help = "Use GPU acceleration for the FoldSeek search (default: false).")
+    args_local_reuse = args_local.add_mutually_exclusive_group()
+    args_local_reuse.add_argument('-ldb', '--local-db', dest = 'local_db_path', type = Path, default = Path('local_db/local_db'), help = "Path to your local FoldSeek DB (format: <path-to-containing-folder>/<DB-prefix>) (default: local_db/local_db).")
+    args_local_reuse.add_argument('--reuse-search', dest = 'reuse_search', type = Path, default = None,
+                            help = "Earlier FoldSeek result to reuse (local modes: text file; remote mode: folder of webserver json's) (default: None).")
     args_local.add_argument('-cdb', '--cds-coords-db', dest = 'cds_db_path', type = Path, default = Path('local_cds_db.gz'), help = "Path of the CDS coordinates DB (default: local_cds_db.gz).")
     
     args_local_clustered = parser.add_argument_group('Local-clustered-specific search options')
@@ -150,11 +158,17 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
     """
     ## Validate arguments
     if args.mode not in ['local', 'remote', 'local_clustered']:
-        raise ValueError('Invalid search mode. Possible choices: "local" and "remote".')
+        raise ValueError('Invalid search mode. Possible choices: "local", "local_clustered", or "remote".')
     if not(set(args.db) <= {'local', 'afdb-proteome', 'afdb-swissprot', 'afdb50'}):
         raise ValueError("Invalid target database choice. Possible choices: 'afdb-proteome', 'afdb-swissprot' and 'afdb50'.")
-    if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
-        raise ValueError('Query folder path does not exist or does not contain cif files.')
+    # This check does not matter if there are results to be reused
+    if not(args.reuse_search):
+        if not(args.query_folder.is_dir() and any(args.query_folder.glob('*cif'))):
+            raise ValueError('Query folder path does not exist or does not contain cif files.')
+    # Otherwise, check whether the supplied reuse path is valid
+    else:
+        if not(args.reuse_search.is_dir() or args.reuse_search.is_file()):
+            raise ValueError('Reuse path does not exist.')
     if not(args.cores > 0):
         raise ValueError('Number of cores must be strictly positive.')
     if not(args.max_workers > 0): 
@@ -163,7 +177,7 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
         raise ValueError('Maximum e-value should be a number between 0 and 1.')
     if not(args.min_seqid >= 0 and args.min_seqid <= 100):
         raise ValueError("Minimum sequence identity should be a percentage between 0 and 100.")
-    if not(args.min_score >= 0):
+    if not(args.min_bitscore >= 0):
         raise ValueError("Minimum FoldSeek bitscore should be a positive number.")
     if not(args.min_qcov >= 0 and args.min_qcov <= 100):
         raise ValueError("Minimum query coverage should be a percentage between 0 and 100.")
@@ -188,21 +202,25 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
                 raise ValueError("UniProt mapping table path does not exist or is not a file.")
         case 'local':
             db = ["local"]
-            if not(args.local_db_path.is_file()):
-                raise ValueError("Local FoldSeek DB does not exist.")
+            # This check does not matter if there are results to be reused
+            if not(args.reuse_search):
+                if not(args.local_db_path.is_file()):
+                    raise ValueError("Local FoldSeek DB does not exist.")
             if not skip_context_table_check:
                 if not(args.cds_db_path.is_file()):
                     raise ValueError("CDS mapping table path does not exist or is not a file.")
         case 'local_clustered':
             db = ['local']
-            if not(args.local_db_path.is_file()):
-                raise ValueError("Local FoldSeek DB does not exist.")
+            # This check does not matter if there are results to be reused
+            if not(args.reuse_search):
+                if not(args.local_db_path.is_file()):
+                    raise ValueError("Local FoldSeek DB does not exist.")
             if not(args.seq_clusters.is_file()):
                 raise ValueError("MMseqs2 clustering table does not exist.")
             if not skip_context_table_check:
                 if not(args.cds_db_path.is_file()):
                     raise ValueError("CDS mapping table path does not exist or is not a file.")
-    
+                    
     ## Parse the arguments
     # Search parameters
     params = {'mode': args.mode,
@@ -210,8 +228,11 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
               'verbosity': args.verbosity,
               'no_progress': args.no_progress,
               'max_workers': args.max_workers,
+              'gpu': args.gpu,
+              'reuse_search': args.reuse_search,
+              'use_raw_scores': args.use_raw_scores,
               'max_eval': args.max_eval,
-              'min_score': args.min_score,
+              'min_bitscore': args.min_bitscore,
               'min_seqid': args.min_seqid,
               'min_qcov': args.min_qcov,
               'min_tcov': args.min_tcov,
@@ -226,7 +247,8 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
               }
     
     # File paths
-    paths = {'query' : {q.stem: q.resolve() for q in args.query_folder.glob('*.cif')},
+    query_paths = sorted(args.query_folder.glob('*.cif'), key = lambda p: p.name)
+    paths = {'query' : {q.stem: q.resolve() for q in query_paths},
              'uniprot_mapping' : args.mapping_table_path.resolve(),
              'cds_db_path' : args.cds_db_path.resolve(),
              'local_db_path' : args.local_db_path.resolve(),
@@ -245,10 +267,23 @@ def parse_and_validate_arguments(args: argparse.Namespace, skip_context_table_ch
             msg = 'Output folder already exists! Rerun with -f to overwrite it.'
             LOG.error(msg)
             raise err
-    
+            
     # Temp folder will always be unique
     paths['temp_folder'].mkdir(parents = True, exist_ok = True)
     paths['temp_folder'] = Path(tempfile.mkdtemp(dir = paths['temp_folder']))
+    
+    # Check for valid query CIF files
+    CANONICAL_AMINO_ACIDS = {'ARG', 'HIS', 'LYS', 'ASP', 'GLU', 'SER', 'THR', 
+                         'ASN', 'GLN', 'CYS', 'GLY', 'PRO', 'ALA', 'VAL',
+                         'ILE', 'LEU', 'MET', 'PHE', 'TYR', 'TRP'}
+    for query in paths['query'].values():
+        struct = MMCIF2Dict(query)
+        if 'ATOM' not in struct['_atom_site.group_PDB']:
+            raise ValueError(f"Query file {query.name} does not contain atoms!")
+        if not(CANONICAL_AMINO_ACIDS & set(struct['_atom_site.label_comp_id'])):
+            raise ValueError(f"Query file {query.name} does not contain any canonical amino acid!")
+        if len(set(struct['_atom_site.label_asym_id'])) != 1:
+            raise ValueError(f"Query file {query.name} contains more than one peptide chain!")
     
     # Output flags
     output_flags = {'tables': args.output_tables,

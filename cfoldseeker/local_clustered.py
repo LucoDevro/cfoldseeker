@@ -36,9 +36,9 @@ class LocalClusteredSearch(LocalSearch):
         representative of every sequence in the target database. These representatives
         then form the FoldSeek target structure database.
     """
-    def __init__(self, query, db_path, coord_db_path, params = {}, hits = [], clusters = [],
-                 output_flags = {}, output_folder = Path('.'), temp_folder = Path('.'),
-                 seq_clust_tsv = Path('.')):
+    def __init__(self, query, db_path, coord_db_path, seq_clust_tsv, params = None, 
+                 hits = None, clusters = None, output_flags = None, 
+                 output_folder = None, temp_folder = None):
         """
         Initialise a LocalClusteredSearch instance with database paths and parameters.
         
@@ -50,8 +50,9 @@ class LocalClusteredSearch(LocalSearch):
             db_path: Path to the local FoldSeek protein structure target database.
             coord_db_path: Path to the CDS coordinates database file (tab-separated,
                 no header).
+            seq_clust_tsv: Path to the MMseqs2 clustering table.
             params: Dictionary of search parameters (e.g., min_seqid, max_eval,
-                min_score). Defaults to empty dict.
+                min_bitscore). Defaults to empty dict.
             hits: List of Hit objects from previous searches. Defaults to empty list.
             clusters: List of gene clusters from previous analysis. Defaults to
                 empty list.
@@ -59,8 +60,6 @@ class LocalClusteredSearch(LocalSearch):
             output_folder: Path to folder for output files. Defaults to current
                 directory.
             temp_folder: Path to folder for temporary files. Defaults to current
-                directory.
-            seq_clust_tsv: Path to the MMseqs2 clustering table. Defaults to current
                 directory.
                 
         Note:
@@ -102,12 +101,12 @@ class LocalClusteredSearch(LocalSearch):
         LOG.info('Expanding the hit set with sequence cluster members')
         
         # Identify which genes remained after filtering
-        filtered_genes = results.select('target').unique()
+        filtered_genes = results.select('target').unique().to_series().to_list() # List conversion for efficient filtering down
         
         # Prefilter clustering table for present genes
         LOG.info('Prefiltering sequence clustering table')
-        seq_clust_filt = self.seq_clust.filter(pl.col('representative').is_in(filtered_genes['target']))
-        seq_clust_filt = seq_clust_filt.collect() # Materialise for join efficiency
+        seq_clust_filt = self.seq_clust.filter(pl.col('representative').is_in(filtered_genes))
+        seq_clust_filt = seq_clust_filt.collect() # Materialise for efficiency of the next join
         
         # Include all sequence cluster members by joining with the MMseqs2 clustering table
         LOG.info('Adding sequence cluster members')
@@ -161,8 +160,8 @@ class LocalClusteredSearch(LocalSearch):
             None
         """
         
-        LOG.info('STARTING PART 1: Executing FoldSeek search')
-        self.run_foldseek()
+        LOG.info('STARTING PART 1: Searching homologs')
+        self.search_homologs()
         LOG.info("FINISHED PART 1")
         
         LOG.info("STARTING PART 2: Identifying hits in FoldSeek results")

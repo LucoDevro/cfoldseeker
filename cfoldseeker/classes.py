@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import operator
+import re
 import itertools as it
 import logging
 import shutil
@@ -9,6 +10,8 @@ import polars as pl
 import networkx as nx
 from abc import ABC, abstractmethod
 from pathlib import Path
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from cblaster.classes import Session
 from cblaster.plot import plot_session
@@ -36,18 +39,19 @@ class Hit:
         taxon_name (str): Name of the taxon in which this hit was found.
         taxon_id (int): Identifier of the taxon in which this hit was found.
         evalue (float): E-value of the FoldSeek hit.
-        score (int): FoldSeek alignment score.
+        bitscore (int): FoldSeek alignment bitscore.
         seqid (float): Sequence identity percentage with the query protein.
         qcov (float): Query coverage percentage.
         tcov (float): Target coverage percentage.
         scaff (str): RefSeq or GenBank ID of the scaffold encoding the hit.
         coords (list): Genomic coordinates of the encoding gene's exons.
         strand (str): DNA strand the encoding gene is located on ('+' or '-').
+        alnlen (int): Match alignment length in bp.
     """
     
-    def __init__(self, db_id, query, crossref_id = [], crossref_method = '', name = '', 
-                 taxon_name = '', taxon_id = 0, db = "", filelabel = "", evalue = 1, score = 0, 
-                 seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = [], strand = ''):
+    def __init__(self, db_id, query, crossref_id = None, crossref_method = '', name = '', 
+                 taxon_name = '', taxon_id = 0, db = "", filelabel = "", evalue = 1, bitscore = 0, 
+                 seqid = 0, qcov = 0, tcov = 0, scaff = '', coords = None, strand = '', alnlen = 0):
         """
         Initialise a Hit object with FoldSeek search results and genomic information.
         
@@ -62,13 +66,14 @@ class Hit:
             db (str, optional): Structure database name. Defaults to "".
             filelabel (str, optional): Filelabel of the local files with the hit's sequences in case of local DBs. Defaults to ''.
             evalue (float, optional): E-value threshold. Defaults to 1.
-            score (int, optional): FoldSeek score. Defaults to 0.
+            bitscore (int, optional): FoldSeek bitscore. Defaults to 0.
             seqid (float, optional): Sequence identity percentage. Defaults to 0.
             qcov (float, optional): Query coverage percentage. Defaults to 0.
             tcov (float, optional): Target coverage percentage. Defaults to 0.
             scaff (str, optional): Scaffold ID. Defaults to ''.
             coords (list, optional): Exon coordinates. Defaults to [].
             strand (str, optional): DNA strand. Defaults to ''.
+            alnlen (int, optional): match alignment length in bp. Defaults to 0.
         """
         self.query: str = query #ID of the homologous query protein
         
@@ -76,7 +81,7 @@ class Hit:
         self.db_id: str = db_id #ID of the hit in its DB
         self.db: str = db #Structure database the hit was found in
         self.filelabel: str = filelabel #Filelabel of the local files the hit's sequences are encoded in case of local DBs
-        self.crossref_id: list = crossref_id #ID used for crossreffing (either ID from KEGG or GenPept)
+        self.crossref_id: list = crossref_id if crossref_id else [] #ID used for crossreffing (either ID from KEGG or GenPept)
         self.crossref_method: str = crossref_method #Method used for crossreffing (either KEGG or GenPept)
         
         # FoldSeek hit properties
@@ -84,14 +89,15 @@ class Hit:
         self.taxon_name: str = taxon_name #name of the taxon in which this hit was found
         self.taxon_id: int = taxon_id
         self.evalue: float = evalue #evalue of the FoldSeek hit
-        self.score: int = score #FoldSeek score
+        self.bitscore: int = bitscore #FoldSeek bitscore
         self.seqid: float = seqid #Sequence identity with the query protein
         self.qcov: float = qcov #Query coverage
         self.tcov: float = tcov #Target coverage
+        self.alnlen: int = alnlen #alignment length
         
         # Genomic properties
         self.scaff: str = scaff #RefSeq or GenBank ID of the scaffold encoding the hit
-        self.coords: list = coords #list of genomic coordinates of the encoding gene's exons
+        self.coords: list = coords if coords else [] #list of genomic coordinates of the encoding gene's exons
         self.strand: str = strand #DNA strand the encoding gene is part from
         
     
@@ -117,7 +123,8 @@ class Hit:
                 'taxon_id': self.taxon_id,
                 'filelabel': self.filelabel,
                 'evalue': self.evalue,
-                'score': self.score,
+                'bitscore': self.bitscore,
+                'alnlen': self.alnlen,
                 'seqid': self.seqid,
                 'qcov': self.qcov,
                 'tcov': self.tcov,
@@ -189,10 +196,9 @@ class Hit:
                  for overlaps). Returns the negative of the length of the smaller
                  gene in case of a full overlap.
         """
-        first = min([self, other_hit], key = operator.methodcaller('start'))
+        first, last = sorted((self, other_hit), key = operator.methodcaller('start'))
         first_start = first.start()
         first_end = first.end()
-        last = max([self, other_hit], key = operator.methodcaller('start'))
         last_start = last.start()
         last_end = last.end()
         
@@ -204,10 +210,10 @@ class Hit:
             return last_start - first_end 
         
         
-    # Checks whether two hits are at exactly the same genomic coordinates
+    # Checks whether two hits are at exactly the same genomic location
     def same_location(self, other_hit: 'Hit') -> bool:
         """
-        Check if two hits are at exactly the same genomic coordinates.
+        Check if two hits are at exactly the same genomic location.
         
         Args:
             other_hit (Hit): The other Hit object to compare.
@@ -216,9 +222,13 @@ class Hit:
             bool: True if both hits are on the same scaffold and their genomic
                   coordinates completely overlap, False otherwise.
         """
-        first = min([self, other_hit], key = operator.methodcaller('start'))
-        last = max([self, other_hit], key = operator.methodcaller('start'))
-        return last.start() == first.start() and last.end() == first.end() and first.scaff == last.scaff
+        location_criteria = (
+            self.start() == other_hit.start(),
+            self.end() == other_hit.end(),
+            self.scaff == other_hit.scaff,
+            )
+        
+        return all(location_criteria)
     
 
 class Cluster:
@@ -233,6 +243,7 @@ class Cluster:
         hits (list[Hit]): List of Hit objects in the cluster.
         number (int): Cluster identifier/rank number.
         score (int): Cumulative score of all hits in the cluster.
+        bitscore (int): Cumulative raw bitscore of all hits in the cluster. 
         start (int): Minimum genomic coordinate across all hits.
         end (int): Maximum genomic coordinate across all hits.
         length (int): Total length in base pairs of all exons across hits.
@@ -241,13 +252,15 @@ class Cluster:
         taxon_name (str): Taxonomic name (taken from first hit).
         filelabel (str): Filelabel of local sequence file (taken from first hit).
     """
-    def __init__(self, hits, number = 0):
+    def __init__(self, hits, number = 0, use_raw_score = False):
         """
         Initialise a Cluster object with a list of hits.
         
         Args:
             hits (list[Hit]): List of Hit objects to cluster together.
             number (int, optional): Cluster identifier number. Defaults to 0.
+            use_raw_score (bool, optional): Flags to use the raw bitscore as cluster score,
+                i.e. to not normalise each hit by alignment length before summing. Defaults to False.
             
         Raises:
             ValueError: If hits have non-unique scaffold, taxon ID, or taxon name attributes.
@@ -255,8 +268,12 @@ class Cluster:
         self.hits: list[Hit] = hits
         self.number: int = number
         
-        # Calculate cluster scores by summing hit scores
-        self.score: int = sum([h.score for h in self.hits])
+        # Calculate cluster score by summing (normalised) hit scores
+        self.bitscore = sum([h.bitscore for h in self.hits])
+        if use_raw_score:
+            self.score: int = self.bitscore
+        else:
+            self.score: int = sum([h.bitscore / h.alnlen for h in self.hits])
         
         # Cluster coordinates are defined as the most extreme coordinates
         self.start: int = min([h.start() for h in self.hits])
@@ -305,7 +322,7 @@ class Cluster:
     
     
     def __repr__(self) -> str:
-        return f"Cluster {self.number}: {len(self.hits)} proteins from {self.scaff} ({self.start} - {self.end}), ({self.strand})\tScore: {self.score}"
+        return f"Cluster {self.number}: {len(self.hits)} proteins from {self.scaff} ({self.start} - {self.end})\tScore: {self.score}"
     
     
     def as_dict(self) -> dict:
@@ -318,13 +335,15 @@ class Cluster:
         """
         return {'hits': ','.join([h.db_id for h in self.hits]),
                 'number': self.number,
+                'bitscore': self.bitscore,
                 'score': self.score,
                 'start': self.start,
                 'end': self.end,
                 'length': self.length,
                 'scaff': self.scaff,
                 'taxon_id': self.taxon_id,
-                'taxon_name': self.taxon_name}
+                'taxon_name': self.taxon_name,
+                'filelabel': self.filelabel}
     
 
 class Search(ABC):
@@ -346,13 +365,13 @@ class Search(ABC):
         OUTPUT_DIR (Path): Directory for output files.
         TEMP_DIR (Path): Directory for temporary files.
     """
-    def __init__(self, query, params = {}, hits = [], clusters = [], output_flags = {},
-                 output_folder = Path('.'), temp_folder = Path('.')):
+    def __init__(self, query, params = None, hits = None, clusters = None, output_flags = None,
+                 output_folder = None, temp_folder = None):
         """
         Initialise a Search object.
         
         Args:
-            query (list): List of query file paths or query identifiers.
+            query (dict): Dictionary of query file paths or query identifiers.
             params (dict, optional): Search parameters dictionary. Defaults to {}.
             hits (list, optional): Pre-loaded Hit objects. Defaults to [].
             clusters (list, optional): Pre-loaded Cluster objects. Defaults to [].
@@ -360,14 +379,14 @@ class Search(ABC):
             output_folder (Path, optional): Output directory path. Defaults to '.'.
             temp_folder (Path, optional): Temporary directory path. Defaults to '.'.
         """
-        self.query: list = query # list of query filepaths
-        self.params: dict = params # dictionary containing the search configuration
-        self.hits: list = hits # list of Hit objects
-        self.clusters: list = clusters # list of Cluster objects
-        self.output_flags: dict = output_flags # dictionary flagging the output files to be generated
+        self.query: dict = query # dictionary of query filepaths
+        self.params: dict = params if params else {} # dictionary containing the search configuration
+        self.hits: list = hits if hits else [] # list of Hit objects
+        self.clusters: list = clusters if clusters else [] # list of Cluster objects
+        self.output_flags: dict = output_flags if output_flags else {} # dictionary flagging the output files to be generated
         
-        self.OUTPUT_DIR: Path = output_folder
-        self.TEMP_DIR: Path = temp_folder
+        self.OUTPUT_DIR: Path = output_folder if output_folder else Path('.')
+        self.TEMP_DIR: Path = temp_folder if temp_folder else Path('.')
         LOG.debug(f'Created temporary folder at {self.TEMP_DIR}.')
         
         return None
@@ -387,6 +406,17 @@ class Search(ABC):
             search process including FoldSeek execution and result parsing.
         """
         pass
+    
+    @abstractmethod
+    def search_homologs(self):
+        """
+        Search structural homologs of each query protein, potentially avoiding a
+        FoldSeek call by reusing earlier results.
+        
+        Note:
+            This method must be implemented by subclasses to orchestrate the homolog
+            search workflow.
+        """
     
     @abstractmethod
     def run_foldseek(self):
@@ -416,8 +446,10 @@ class Search(ABC):
         """
         Identify proximal groups among the hits.
         
-        Calculates the distance between all genes on the same scaffold, discards self-hits
-        and hit pairs that fail the intergenic distance threshold.
+        First sets the boundaries of the proximal groups through a one-pass intergenic 
+        distance scan of the scaffold.
+        Then calculates the distance between all genes within each proximal group.
+        Finnaly, it discards self-hits and hit pairs that fail the intergenic distance threshold.
         
         Returns:
             close_groups (list(list[Hit])): Hit pairs of proximal hits that pass the intergenic distance threshold.
@@ -425,7 +457,7 @@ class Search(ABC):
         Mutates:
             RuntimeError: If there are not hit groups passing the intergenic distance criteria.
         """
-        ## First, make groups by scaffold
+        ### First, make groups by scaffold
         LOG.info('Grouping hits by scaffold')
         scaff_groups = {}
         for h in self.hits:
@@ -434,36 +466,56 @@ class Search(ABC):
             else:
                 scaff_groups[h.scaff] = [h]
         
-        ## Then, calculate the intergenic distance between all connections on the same scaffold
-        ## and filter out the ones failing the intergenic threshold
-        ## and filter out self-hits as these are not genuine collocalised genes
-        LOG.info("Calculating intergenic distances")
-        close_groups = []
-        for _, hits in scaff_groups.items():
-            # Calculate the intergenetic distances and find the self-hits
-            pairs_to_test = list(it.combinations(hits, 2))
-            self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
-            dists = {pair: Hit.intergenic_distance(*pair) for pair in pairs_to_test}
-            
-            # Apply the filtering
-            dists = {k:v for k,v in dists.items() if v <= max_gap} # apply max gap criterium
-            dists = {k:v for k,v in dists.items() if not self_hits[k]} # filter out self-hits
-            
-            # Collect if there's a group of proximal hits on this scaffold
-            if len(dists) > 0:
-                close_groups.append(list(dists.keys()))
+        ### Then, find the proximal groups on each scaffold. A proximal group is defined
+        ### as a set of genes that have an intergenic distance with their direct 
+        ### neighbours below the gap threshold.
+        LOG.info("Finding proximal groups")
+        
+        with logging_redirect_tqdm(loggers = [LOG]):
+            proximal_groups = []
+            for hits in tqdm(list(scaff_groups.values()), leave = False, disable = self.params['no_progress'],
+                             unit_scale = True, mininterval = 1):
+                ## (1) Calculate the intergenic distances between adjacent genes 
+                ## in a linear chain sorted along the entire scaffold.
+                hits_sorted_linear = sorted(hits, key = operator.methodcaller('start'))
+                pairs_linear = list(zip(hits_sorted_linear, hits_sorted_linear[1:]))
+                dists_linear = {pair: Hit.intergenic_distance(*pair) for pair in pairs_linear}
                 
-        ## Abort if there are no proximal hit groups
-        if len(close_groups) == 0:
+                ## (2) Cut the chain where the gap is larger than the max intergenic gap
+                dists_linear = {k:v for k,v in dists_linear.items() if v <= max_gap}
+                
+                ## (3) Determine the genes in the subchains that remain (= the proximal groups)
+                G_linear = nx.DiGraph()
+                G_linear.add_edges_from(dists_linear.keys())
+                linear_chains = list(nx.weakly_connected_components(G_linear))
+                
+                ## (4) Calculate all intergenic distances within each proximal group
+                ## and check for self-hits
+                pairs_to_test = [list(it.combinations(lc, 2)) for lc in linear_chains]
+                pairs_to_test = list(it.chain(*pairs_to_test))
+                dists = {pair: Hit.intergenic_distance(*pair) for pair in pairs_to_test}
+                self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
+                
+                ## (5) Filter out self-hits and hits failing the intergenic threshold
+                dists = {k:v for k,v in dists.items() if v <= max_gap}
+                dists = {k:v for k,v in dists.items() if not self_hits[k]}
+                
+                # Collect the remaining proximal groups on this scaffold, if any
+                if dists:
+                    proximal_groups.append(list(dists.keys()))
+                
+        ### Abort if there are no proximal hit groups
+        if len(proximal_groups) == 0:
             msg = "No hit groups passed the distance criteria!"
             LOG.error(msg)
             raise RuntimeError(msg)
             
-        return close_groups
+        return proximal_groups
     
     
     def identify_clusters_from_groups(self, close_groups: list, max_length: int, min_hits: int,
-                                      min_covered_queries: int, require: set[str], all_layouts: bool):
+                                      min_covered_queries: int, require: set[str], all_layouts: bool,
+                                      use_raw_scores: bool):
         """
         Identify clusters from the proximal hit groups.
         
@@ -477,57 +529,60 @@ class Search(ABC):
         ## Identify the clusters by finding chains of distance pairs on the same scaffold using a directed network graph
         ## Account for multi-hits and -crossrefs by generating all possible hit chains when encountering pairs on the same genomic location
         LOG.info("Identifying gene clusters from chains of distance pairs passing cluster criteria")
-        clusters = []
-        for cg in close_groups:
-            # Order every hit pair so from up- to downstream
-            reordered_cg = [sorted(pair, key = operator.methodcaller('start')) for pair in cg]
-            
-            # Identify the hit chains
-            G = nx.DiGraph()
-            G.add_edges_from(reordered_cg)
-            chains = list(nx.weakly_connected_components(G))
-            
-            # Then, identify all possible chains by generating chains for all multi-hit or -crossref combinations
-            all_clusters = []
-            for chain in chains:
-                subG = G.subgraph(chain)
+        
+        with logging_redirect_tqdm(loggers = [LOG]):
+            clusters = []
+            for cg in tqdm(close_groups, leave = False, disable = self.params['no_progress'],
+                           unit_scale = True, mininterval = 1):
+                # Order every hit pair from up- to downstream
+                reordered_cg = [sorted(pair, key = operator.methodcaller('start')) for pair in cg]
                 
-                # Identify all possible hits to start a chain and to end a chain
-                min_start = min([h.start() for h in chain])
-                max_start = max([h.start() for h in chain])
-                firsts = [h for h in chain if h.start() == min_start]
-                lasts = [h for h in chain if h.start() == max_start]
+                # Identify the hit chains
+                G = nx.DiGraph()
+                G.add_edges_from(reordered_cg)
+                chains = list(nx.weakly_connected_components(G))
                 
-                # Generate all possible hit chains
-                all_paths_this_chain = [list(nx.all_simple_paths(subG, first, last)) for first in firsts for last in lasts]
-                all_paths_this_chain = list(it.chain(*all_paths_this_chain))
-                # Keep only the longest paths (discard the paths with shortcuts skipping a gene)
-                max_path_length = max([len(p) for p in all_paths_this_chain])
-                all_paths_this_chain = [p for p in all_paths_this_chain if len(p) == max_path_length]
+                # Then, identify all possible chains by generating chains for all multi-hit or -crossref combinations
+                all_clusters = []
+                for chain in chains:
+                    subG = G.subgraph(chain)
+                    
+                    # Identify all possible hits to start a chain and to end a chain
+                    min_start = min([h.start() for h in chain])
+                    max_start = max([h.start() for h in chain])
+                    firsts = [h for h in chain if h.start() == min_start]
+                    lasts = [h for h in chain if h.start() == max_start]
+                    
+                    # Generate all possible hit chains
+                    all_paths_this_chain = [list(nx.all_simple_paths(subG, first, last)) for first in firsts for last in lasts]
+                    all_paths_this_chain = list(it.chain(*all_paths_this_chain))
+                    # Keep only the longest paths (discard the paths with shortcuts skipping a gene)
+                    max_path_length = max([len(p) for p in all_paths_this_chain])
+                    all_paths_this_chain = [p for p in all_paths_this_chain if len(p) == max_path_length]
+                    
+                    # Create Cluster objects from these longest paths
+                    all_clusters_this_chain = [Cluster(p, use_raw_score = use_raw_scores) for p in all_paths_this_chain]
+                    
+                    # Apply intra-cluster filtering criteria
+                    # Minimum number of hits
+                    all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain if len(cl.hits) >= min_hits]
+                    # Minimum number of covered queries
+                    covered_queries = {cl: {h.query for h in cl.hits} for cl in all_clusters_this_chain_filt}
+                    all_clusters_this_chain_filt = [cl for cl,cov_qrs in covered_queries.items()
+                                                    if len(cov_qrs) >= min_covered_queries and set(require) <= cov_qrs]
+                    # Maximum cluster length
+                    all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain_filt if cl.length <= max_length]
+                    
+                    # Keep only the cluster layout with the highest bitscore sum if not all cluster layouts are requested
+                    if not(all_layouts) and len(all_clusters_this_chain_filt) > 0:
+                        all_clusters_this_chain_filt = [max(all_clusters_this_chain_filt, key = operator.attrgetter('bitscore'))]
+                    
+                    # Collect
+                    all_clusters.append(all_clusters_this_chain_filt)
                 
-                # Create Cluster objects from these longest paths
-                all_clusters_this_chain = [Cluster(p) for p in all_paths_this_chain]
-                
-                # Apply intra-cluster filtering criteria
-                # Minimum number of hits
-                all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain if len(cl.hits) >= min_hits]
-                # Minimum number of covered queries
-                covered_queries = {cl: {h.query for h in cl.hits} for cl in all_clusters_this_chain_filt}
-                all_clusters_this_chain_filt = [cl for cl,cov_qrs in covered_queries.items()
-                                                if len(cov_qrs) >= min_covered_queries and set(require) <= cov_qrs]
-                # Maximum cluster length
-                all_clusters_this_chain_filt = [cl for cl in all_clusters_this_chain_filt if cl.length <= max_length]
-                
-                # Keep only the best-scoring cluster layout if not all cluster layouts are requested
-                if not(all_layouts) and len(all_clusters_this_chain_filt) > 0:
-                    all_clusters_this_chain_filt = [max(all_clusters_this_chain_filt, key = operator.attrgetter('score'))]
-                
-                # Collect
-                all_clusters.append(all_clusters_this_chain_filt)
-            
-            # Save the clusters for this genomic neighbourhood
-            all_clusters = list(it.chain(*all_clusters))
-            clusters.append(all_clusters)
+                # Save the clusters for this genomic neighbourhood
+                all_clusters = list(it.chain(*all_clusters))
+                clusters.append(all_clusters)
         
         # Flatten out all results
         clusters = list(it.chain(*clusters))
@@ -560,6 +615,7 @@ class Search(ABC):
         min_covered_queries: int = self.params['min_cov_qrs']
         require: list = self.params['require']
         all_layouts: bool = self.params['all_layouts']
+        use_raw_scores: bool = self.params['use_raw_scores']
         
         LOG.debug('Applying the following cluster identification criteria:')
         LOG.debug(f'maximum intergenic gap >= {max_gap}')
@@ -570,10 +626,11 @@ class Search(ABC):
         
         ### Cluster identification
         ## First find proximal hit groups
-        close_groups = self.identify_proximal_groups(max_gap = max_gap)
+        proximal_groups = self.identify_proximal_groups(max_gap = max_gap)
         ## Then identify clusters
-        clusters = self.identify_clusters_from_groups(close_groups, max_length, min_hits,
-                                                      min_covered_queries,require, all_layouts)
+        clusters = self.identify_clusters_from_groups(proximal_groups, max_length, min_hits,
+                                                      min_covered_queries,require, all_layouts,
+                                                      use_raw_scores)
         
         ## Abort if no clusters have been identified
         if len(clusters) == 0:
@@ -581,7 +638,7 @@ class Search(ABC):
             LOG.error(msg)
             raise RuntimeError(msg)
         
-        ## Rank overall by cluster score and add number
+        ### Rank clusters by chosen metric and renumber
         LOG.info('Sorting and renumbering by cluster score')
         clusters.sort(key = operator.attrgetter('score'), reverse = True)
         for idx,cl in enumerate(clusters):
@@ -614,14 +671,14 @@ class Search(ABC):
         all_hit_data = [h.as_dict() for h in self.hits]
         all_hit_data_df = pl.DataFrame(all_hit_data, schema = ['db_id', 'query', 'scaff', 'strand', 'coords', 'db', 'crossref_id',
                                                                'crossref_method', 'name', 'taxon_name', 'taxon_id', 'filelabel', 'evalue', 
-                                                               'score', 'seqid', 'qcov', 'tcov'])
+                                                               'bitscore', 'alnlen', 'seqid', 'qcov', 'tcov'])
         all_hit_data_df.write_csv(output_folder / 'hits.tsv', include_header = True, separator = "\t")
         
         # Then the clusters
         LOG.debug('Writing gene cluster table')
         all_cluster_data = [cl.as_dict() for cl in self.clusters]
-        all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'score', 'scaff',
-                                                                       'strand', 'taxon_name', 'taxon_id', 'filelabel'])
+        all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'score', 
+                                                                       'scaff', 'taxon_name', 'taxon_id', 'filelabel'])
         all_cluster_data_df.write_csv(output_folder / 'clusters.tsv', include_header = True, separator = "\t")
         
         return None
@@ -639,6 +696,11 @@ class Search(ABC):
         Returns:
             Session (cblaster.Session): Session holding all information about the identified clusters.
         """
+        
+        CANONICAL_AMINO_ACIDS = ('ARG', 'HIS', 'LYS', 'ASP', 'GLU', 'SER', 'THR', 
+                             'ASN', 'GLN', 'CYS', 'GLY', 'PRO', 'ALA', 'VAL',
+                             'ILE', 'LEU', 'MET', 'PHE', 'TYR', 'TRP')
+        
         def get_sequence_length_from_cif(file: Path) -> int:
             """
             Determine the CDS sequence length from a CIF structure file.
@@ -653,8 +715,13 @@ class Search(ABC):
                 int: Sequence length in base pairs (number of residues * 3).
             """
             structure = MMCIF2Dict(file)
-            res_ids = [int(i) for i in structure['_entity_poly_seq.num']]
-            return max(res_ids)*3 # codon triplets
+            residues = set(zip(structure['_atom_site.label_comp_id'],
+                               structure['_atom_site.label_seq_id']))
+            
+            # Only count canonical amino acids
+            residues = [p for p in residues if p[0] in CANONICAL_AMINO_ACIDS]
+            
+            return len(residues)*3 # codon triplets
         
         def get_clusters_by_id(self, nbs: list) -> list:
             """
@@ -667,6 +734,20 @@ class Search(ABC):
                 list: List of Cluster objects matching the requested numbers.
             """
             return [cl for cl in self.clusters if cl.number in nbs]
+        
+        def remove_suffices(path: Path | str) -> str:
+            """
+            Removes any remaining sequence file extensions from a taxon name.
+            
+            Args:
+                path (Path | str): File path to be processed.
+                
+            Returns:
+                str: File path without trailing sequence file extensions
+            """
+            SEQ_FILE_EXTENSIONS = r'\.(fasta|fna|fa|gb|gbk|gbff)(\.gz)?$'
+            
+            return re.sub(SEQ_FILE_EXTENSIONS, '', str(path))
         
         session_dict = {}
         
@@ -755,7 +836,7 @@ class Search(ABC):
             if (txid, txname, filelabel) in cblaster_organisms.keys():
                 this_organism = cblaster_organisms[(txid, txname, filelabel)]
             else:
-                this_organism = {'name': txname,
+                this_organism = {'name': remove_suffices(txname),
                                  'strain': '',
                                  'scaffolds': {}}
                 cblaster_organisms[(txid, txname, filelabel)] = this_organism
@@ -796,10 +877,10 @@ class Search(ABC):
                                                       'identity': hit.seqid,
                                                       'coverage': hit.tcov,
                                                       'evalue': hit.evalue,
-                                                      'bitscore': hit.score}]
+                                                      'bitscore': hit.bitscore}]
                     cblaster_this_subject['name'] = hit.crossref_id
                     cblaster_this_subject['ipg'] = hit.db_id
-                    cblaster_this_subject['start'] = hit.start() - 1 # Hits in cblaster are somehow one-off at the start
+                    cblaster_this_subject['start'] = hit.start()
                     cblaster_this_subject['end'] = hit.end()
                     cblaster_this_subject['strand'] = int(f"{hit.strand}1")
                     cblaster_this_subject['sequence'] = hit.filelabel
