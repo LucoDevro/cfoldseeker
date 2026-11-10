@@ -322,7 +322,7 @@ class Cluster:
     
     
     def __repr__(self) -> str:
-        return f"Cluster {self.number}: {len(self.hits)} proteins from {self.scaff} ({self.start} - {self.end}), ({self.strand})\tScore: {self.score}"
+        return f"Cluster {self.number}: {len(self.hits)} proteins from {self.scaff} ({self.start} - {self.end})\tScore: {self.score}"
     
     
     def as_dict(self) -> dict:
