@@ -446,8 +446,10 @@ class Search(ABC):
         """
         Identify proximal groups among the hits.
         
-        Calculates the distance between all genes on the same scaffold, discards self-hits
-        and hit pairs that fail the intergenic distance threshold.
+        First sets the boundaries of the proximal groups through a one-pass intergenic 
+        distance scan of the scaffold.
+        Then calculates the distance between all genes within each proximal group.
+        Finnaly, it discards self-hits and hit pairs that fail the intergenic distance threshold.
         
         Returns:
             close_groups (list(list[Hit])): Hit pairs of proximal hits that pass the intergenic distance threshold.
@@ -455,7 +457,7 @@ class Search(ABC):
         Mutates:
             RuntimeError: If there are not hit groups passing the intergenic distance criteria.
         """
-        ## First, make groups by scaffold
+        ### First, make groups by scaffold
         LOG.info('Grouping hits by scaffold')
         scaff_groups = {}
         for h in self.hits:
@@ -464,34 +466,51 @@ class Search(ABC):
             else:
                 scaff_groups[h.scaff] = [h]
         
-        ## Then, calculate the intergenic distance between all connections on the same scaffold
-        ## and filter out the ones failing the intergenic threshold
-        ## and filter out self-hits as these are not genuine collocalised genes
-        LOG.info("Calculating intergenic distances")
+        ### Then, find the proximal groups on each scaffold. A proximal group is defined
+        ### as a set of genes that have an intergenic distance with their direct 
+        ### neighbours below the gap threshold.
+        LOG.info("Finding proximal groups")
         
         with logging_redirect_tqdm(loggers = [LOG]):
-            close_groups = []
-            for hits in tqdm(list(scaff_groups.values()), leave = False, disable = self.params['no_progress']):
-                # Calculate the intergenetic distances and find the self-hits
-                pairs_to_test = list(it.combinations(hits, 2))
-                self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
+            proximal_groups = []
+            for hits in tqdm(list(scaff_groups.values()), leave = False, disable = self.params['no_progress'],
+                             unit_scale = True, mininterval = 1):
+                ## (1) Calculate the intergenic distances between adjacent genes 
+                ## in a linear chain sorted along the entire scaffold.
+                hits_sorted_linear = sorted(hits, key = operator.methodcaller('start'))
+                pairs_linear = list(zip(hits_sorted_linear, hits_sorted_linear[1:]))
+                dists_linear = {pair: Hit.intergenic_distance(*pair) for pair in pairs_linear}
+                
+                ## (2) Cut the chain where the gap is larger than the max intergenic gap
+                dists_linear = {k:v for k,v in dists_linear.items() if v <= max_gap}
+                
+                ## (3) Determine the genes in the subchains that remain (= the proximal groups)
+                G_linear = nx.DiGraph()
+                G_linear.add_edges_from(dists_linear.keys())
+                linear_chains = list(nx.weakly_connected_components(G_linear))
+                
+                ## (4) Calculate all intergenic distances within each proximal group
+                ## and check for self-hits
+                pairs_to_test = [list(it.combinations(lc, 2)) for lc in linear_chains]
+                pairs_to_test = list(it.chain(*pairs_to_test))
                 dists = {pair: Hit.intergenic_distance(*pair) for pair in pairs_to_test}
+                self_hits = {pair: Hit.same_location(*pair) for pair in pairs_to_test}
                 
-                # Apply the filtering
-                dists = {k:v for k,v in dists.items() if v <= max_gap} # apply max gap criterium
-                dists = {k:v for k,v in dists.items() if not self_hits[k]} # filter out self-hits
+                ## (5) Filter out self-hits and hits failing the intergenic threshold
+                dists = {k:v for k,v in dists.items() if v <= max_gap}
+                dists = {k:v for k,v in dists.items() if not self_hits[k]}
                 
-                # Collect if there's a group of proximal hits on this scaffold
-                if len(dists) > 0:
-                    close_groups.append(list(dists.keys()))
+                # Collect the remaining proximal groups on this scaffold, if any
+                if dists:
+                    proximal_groups.append(list(dists.keys()))
                 
-        ## Abort if there are no proximal hit groups
-        if len(close_groups) == 0:
+        ### Abort if there are no proximal hit groups
+        if len(proximal_groups) == 0:
             msg = "No hit groups passed the distance criteria!"
             LOG.error(msg)
             raise RuntimeError(msg)
             
-        return close_groups
+        return proximal_groups
     
     
     def identify_clusters_from_groups(self, close_groups: list, max_length: int, min_hits: int,
@@ -513,8 +532,9 @@ class Search(ABC):
         
         with logging_redirect_tqdm(loggers = [LOG]):
             clusters = []
-            for cg in tqdm(close_groups, leave = False, disable = self.params['no_progress']):
-                # Order every hit pair so from up- to downstream
+            for cg in tqdm(close_groups, leave = False, disable = self.params['no_progress'],
+                           unit_scale = True, mininterval = 1):
+                # Order every hit pair from up- to downstream
                 reordered_cg = [sorted(pair, key = operator.methodcaller('start')) for pair in cg]
                 
                 # Identify the hit chains
@@ -606,9 +626,9 @@ class Search(ABC):
         
         ### Cluster identification
         ## First find proximal hit groups
-        close_groups = self.identify_proximal_groups(max_gap = max_gap)
+        proximal_groups = self.identify_proximal_groups(max_gap = max_gap)
         ## Then identify clusters
-        clusters = self.identify_clusters_from_groups(close_groups, max_length, min_hits,
+        clusters = self.identify_clusters_from_groups(proximal_groups, max_length, min_hits,
                                                       min_covered_queries,require, all_layouts,
                                                       use_raw_scores)
         
