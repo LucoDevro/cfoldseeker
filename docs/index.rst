@@ -8,6 +8,31 @@ cfoldseeker
 
 **Welcome to cfoldseeker's documentation!**
 
+|docs|
+|downloads|
+|bioconda|
+|docker|
+|pypi|
+|doi|
+
+.. |docs| image:: https://img.shields.io/readthedocs/cfoldseeker/latest?style=flat-square&maxAge=600&logo=readthedocs
+   :target: https://cfoldseeker.readthedocs.io/en/latest/
+
+.. |bioconda| image:: https://img.shields.io/conda/vn/bioconda/cfoldseeker?style=flat-square&maxAge=3600&logo=anaconda
+   :target: https://anaconda.org/bioconda/cfoldseeker
+
+.. |docker| image:: https://img.shields.io/docker/v/lucodevro/cfoldseeker?sort=semver&label=quay.io&logo=docker
+   :target: https://quay.io/repository/biocontainers/cfoldseeker
+
+.. |pypi| image:: https://img.shields.io/pypi/v/cfoldseeker?sort=semver&logo=pypi
+   :target: https://pypi.org/project/cfoldseeker/
+
+.. |downloads| image:: https://anaconda.org/bioconda/cfoldseeker/badges/downloads.svg
+   :target: https://bioconda.github.io/recipes/cfoldseeker/README.html#download-stats
+
+.. |doi| image:: https://zenodo.org/badge/904110273.svg
+   :target: https://doi.org/10.5281/zenodo.20746182
+
 *cfoldseeker: Identify gene clusters using protein structure similarity.*
 
 ``cfoldseeker`` brings protein structure similarity to gene cluster mining! Starting from a query gene cluster of which you have all protein structure models, **cfoldseeker** searches all genomically colocalised structural homologs in a protein structure database.

@@ -188,6 +188,10 @@ Sometimes, a protein may match with multiple query proteins, for example when yo
 
 If you are interested in all possible cluster layouts passing your filtering thresholds rather than only the highest-scoring one, turn on the ``all-layouts`` flag to keep all passing configurations.
 
+Cluster ranking
+^^^^^^^^^^^^^^^
+By default, ``cfoldseeker`` ranks the identified gene clusters by summed normalised bitscores, i.e. the sum of hit bitscores divided by the hit alignment length. This eliminates any bias introduced by protein lengths, weighing each query protein equally. However, if a good match with smaller genes is not of your interest, and you're more interested in good matches with the larger ones of your query proteins, you can disable this normalisation using the ``--use-raw-scores`` flag.
+
 Using taxon filters
 ^^^^^^^^^^^^^^^^^^^^
 The Foldseek webserver offers an interface to filter hits by a taxonomic filter. ``cfoldseeker`` exposes this interface in its remote mode via the ``-tf`` or ``--taxon-filter`` flag. Foldseek expects NCBI taxon IDs for its taxonomic filter.
@@ -215,7 +219,9 @@ The ``clusters.tsv`` file is a tab-separated file summarising the properties of 
 +-------------+------------------------------------------------------------------------+
 | length      | Sum of the lengths of all exons part of this cluster                   |
 +-------------+------------------------------------------------------------------------+
-| score       | Sum of the Foldseek bitscores of all cluster members                   |
+| score       | Sum of the normalised bitscores of all cluster members                 |
++-------------+------------------------------------------------------------------------+
+| bitscore    | Sum of the Foldseek bitscores of all cluster members                   |
 +-------------+------------------------------------------------------------------------+
 | scaff       | ID of the scaffold/contig harbouring this cluster                      |
 +-------------+------------------------------------------------------------------------+
@@ -259,13 +265,15 @@ The ``hits.tsv`` file gathers metadata about all hits part of the identified clu
 +-----------------+----------------------------------------------------------------------------------+
 | evalue          | Hit e-value                                                                      |
 +-----------------+----------------------------------------------------------------------------------+
-| score           | Hit bitscore                                                                     |
+| bitscore        | Hit bitscore                                                                     |
 +-----------------+----------------------------------------------------------------------------------+
 | seqid           | Sequence identity between hit and query protein (in %)                           |
 +-----------------+----------------------------------------------------------------------------------+
 | qcov            | Query coverage of the hit (which fraction of the query fits) (in %)              |
 +-----------------+----------------------------------------------------------------------------------+
 | tcov            | Target coverage of the hit (which fraction of the target fits) (in %)            |
++-----------------+----------------------------------------------------------------------------------+
+| alnlen          | Length of the alignment between query and hit (in aa)
 +-----------------+----------------------------------------------------------------------------------+
 
 Foldseek output
