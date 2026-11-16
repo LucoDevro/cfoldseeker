@@ -671,14 +671,15 @@ class Search(ABC):
         all_hit_data = [h.as_dict() for h in self.hits]
         all_hit_data_df = pl.DataFrame(all_hit_data, schema = ['db_id', 'query', 'scaff', 'strand', 'coords', 'db', 'crossref_id',
                                                                'crossref_method', 'name', 'taxon_name', 'taxon_id', 'filelabel', 'evalue', 
-                                                               'bitscore', 'alnlen', 'seqid', 'qcov', 'tcov'])
+                                                               'bitscore', 'alnlen', 'seqid', 'qcov', 'tcov',
+                                                               'alnlen'])
         all_hit_data_df.write_csv(output_folder / 'hits.tsv', include_header = True, separator = "\t")
         
         # Then the clusters
         LOG.debug('Writing gene cluster table')
         all_cluster_data = [cl.as_dict() for cl in self.clusters]
         all_cluster_data_df = pl.DataFrame(all_cluster_data, schema = ['number', 'hits', 'start', 'end', 'length', 'score', 
-                                                                       'scaff', 'taxon_name', 'taxon_id', 'filelabel'])
+                                                                       'bitscore', 'scaff', 'taxon_name', 'taxon_id', 'filelabel'])
         all_cluster_data_df.write_csv(output_folder / 'clusters.tsv', include_header = True, separator = "\t")
         
         return None
